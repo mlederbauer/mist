@@ -84,6 +84,14 @@ ION_LST = [
     "[M+H3N+H]+",
     "[M]+",
     "[M-H4O2+H]+",
+    # Negative-mode and neutral-loss adducts (e.g. seen in NIST data)
+    "[M-H]-",
+    "[M+Cl]-",
+    "[M+CHO2]-",
+    "[M-H-CO2]-",
+    "[M-H-H2O]-",
+    "[M+H-NH3]+",
+    "[M+H-CH2O2]+",
 ]
 
 ion_remap = dict(zip(ION_LST, ION_LST))
@@ -110,6 +118,15 @@ ion_to_mass = {
     "[M+H3N+H]+": ELEMENT_TO_MASS["N"] + ELEMENT_TO_MASS["H"] * 4 - ELECTRON_MASS,
     "[M]+": 0 - ELECTRON_MASS,
     "[M-H4O2+H]+": -ELEMENT_TO_MASS["O"] * 2 - ELEMENT_TO_MASS["H"] * 3 - ELECTRON_MASS,
+    # Anions: net atom delta, then +electron_mass (extra electron vs neutral M)
+    "[M-H]-": -ELEMENT_TO_MASS["H"] + ELECTRON_MASS,
+    "[M+Cl]-": ELEMENT_TO_MASS["Cl"] + ELECTRON_MASS,
+    "[M+CHO2]-": ELEMENT_TO_MASS["C"] + ELEMENT_TO_MASS["H"] + ELEMENT_TO_MASS["O"] * 2 + ELECTRON_MASS,
+    "[M-H-CO2]-": -ELEMENT_TO_MASS["H"] - ELEMENT_TO_MASS["C"] - ELEMENT_TO_MASS["O"] * 2 + ELECTRON_MASS,
+    "[M-H-H2O]-": -ELEMENT_TO_MASS["H"] * 3 - ELEMENT_TO_MASS["O"] + ELECTRON_MASS,
+    # Cations: net atom delta, then -electron_mass
+    "[M+H-NH3]+": -ELEMENT_TO_MASS["H"] * 2 - ELEMENT_TO_MASS["N"] - ELECTRON_MASS,
+    "[M+H-CH2O2]+": -ELEMENT_TO_MASS["H"] - ELEMENT_TO_MASS["C"] - ELEMENT_TO_MASS["O"] * 2 - ELECTRON_MASS,
 }
 
 ion_to_add_vec = {
@@ -120,6 +137,13 @@ ion_to_add_vec = {
     "[M+H3N+H]+": element_to_position["N"] + element_to_position["H"] * 4,
     "[M]+": np.zeros_like(element_to_position["H"]),
     "[M-H4O2+H]+": -element_to_position["O"] * 2 - element_to_position["H"] * 3,
+    "[M-H]-": -element_to_position["H"],
+    "[M+Cl]-": element_to_position["Cl"],
+    "[M+CHO2]-": element_to_position["C"] + element_to_position["H"] + element_to_position["O"] * 2,
+    "[M-H-CO2]-": -element_to_position["H"] - element_to_position["C"] - element_to_position["O"] * 2,
+    "[M-H-H2O]-": -element_to_position["H"] * 3 - element_to_position["O"],
+    "[M+H-NH3]+": -element_to_position["H"] * 2 - element_to_position["N"],
+    "[M+H-CH2O2]+": -element_to_position["H"] - element_to_position["C"] - element_to_position["O"] * 2,
 }
 
 instrument_to_type = defaultdict(lambda : "unknown")
@@ -150,7 +174,7 @@ for k, v in zip(els, weights):
 
 def get_ion_idx(ionization: str) -> int:
     """map ionization to its index in one hot encoding"""
-    return ion_to_idx[ionization]
+    return ion_to_idx[ion_remap.get(ionization, ionization)]
 
 
 def get_instr_idx(instrument: str) -> int:

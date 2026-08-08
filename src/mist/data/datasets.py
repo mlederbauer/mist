@@ -122,16 +122,21 @@ def get_paired_spectra(
     spectra_smiles = [name_to_smiles.get(j, None) for j in spectra_names]
     spectra_inchikey = [name_to_inchikey.get(j, None) for j in spectra_names]
     if not allow_none_smiles:
-        mol_list = [
-            Mol.MolFromSmiles(smiles, inchikey=inchikey)
-            for smiles, inchikey in tq(zip(spectra_smiles, spectra_inchikey))
+        paired = [
+            (spec, Mol.MolFromSmiles(smiles, inchikey=inchikey))
+            for spec, smiles, inchikey in tq(
+                zip(spectra_list, spectra_smiles, spectra_inchikey)
+            )
             if smiles is not None
         ]
-        spectra_list = [
-            spec
-            for spec, smi in tq(zip(spectra_list, spectra_smiles))
-            if smi is not None
-        ]
+        # Drop entries whose smiles failed to parse (Mol.MolFromSmiles
+        # returns None), rather than keeping a None misaligned into mol_list.
+        num_dropped = sum(1 for _, mol in paired if mol is None)
+        if num_dropped:
+            logging.info(f"Dropping {num_dropped} spectra with unparseable smiles")
+        paired = [(spec, mol) for spec, mol in paired if mol is not None]
+        spectra_list = [spec for spec, _ in paired]
+        mol_list = [mol for _, mol in paired]
     else:
         mol_list = [
             Mol.MolFromSmiles(smiles, inchikey=inchikey)

@@ -51,8 +51,6 @@ pixi run python src/mist/train_mist.py \
     --labels-file "$DATA/labels.tsv" \
     --spec-folder "$DATA/spec_files.hdf5" \
     --subform-folder "$DATA/subformulae/magma_subform_50.hdf5" \
-    --magma-folder "$DATA/magma_outputs/magma_tsv.hdf5" \
-    --magma-aux-loss \
     --split-file "$DATA/splits/split_1.tsv" \
     --embed-instrument \
     --fp-names morgan4096 \
@@ -71,6 +69,7 @@ pixi run python src/mist/train_mist.py \
     --peak-attn-layers 2 \
     --refine-layers 4 \
     --spectra-dropout 0.1 \
+    --max-peaks 50 \
     --magma-loss-lambda 8 \
     --magma-modulo 512 \
     --form-embedder 'pos-cos' \

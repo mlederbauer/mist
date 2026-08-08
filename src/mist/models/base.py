@@ -6,6 +6,7 @@ including certain superclasses of models
 """
 import logging
 import math
+from pathlib import Path
 from typing import List, Optional
 
 import numpy as np
@@ -267,6 +268,17 @@ class TorchModel(pl.LightningModule):
             filename="best",
             save_weights_only=True,
         )
+        # Full trainer state (optimizer, scheduler, epoch, global step) so a
+        # preempted/requeued job can resume training exactly where it left
+        # off, rather than restarting at epoch 0. save_last keeps this
+        # updated to the most recent epoch regardless of val_loss.
+        last_ckpt_path = Path(tb_path) / "last.ckpt"
+        last_checkpoint_callback = ModelCheckpoint(
+            dirpath=tb_path,
+            save_last=True,
+            save_top_k=0,
+            save_weights_only=False,
+        )
         callbacks = []
         loggers = [tb_logger]
 
@@ -283,6 +295,7 @@ class TorchModel(pl.LightningModule):
 
         if not tune:
             callbacks.append(checkpoint_callback)
+            callbacks.append(last_checkpoint_callback)
             console_logger = utils.ConsoleLogger()
             loggers.append(console_logger)
         else:
@@ -310,7 +323,10 @@ class TorchModel(pl.LightningModule):
             val_check_interval=val_check_interval,
             enable_checkpointing=False if (tune and not tune_save) else True,
         )
-        trainer.fit(self, module)
+        resume_ckpt = str(last_ckpt_path) if last_ckpt_path.exists() else None
+        if resume_ckpt:
+            logging.info(f"Resuming training from {resume_ckpt}")
+        trainer.fit(self, module, ckpt_path=resume_ckpt)
 
         if tune:
             return None

@@ -80,7 +80,12 @@ class PresetSpectraSplitter(SpectraSplitter):
         self.split_file = split_file
         self.split_name = Path(split_file).stem
         self.split_df = pd.read_csv(self.split_file, sep="\t")
-        self.name_to_fold = dict(zip(self.split_df["name"], self.split_df["split"]))
+
+        # Some split files (e.g. NIST) use "spec"/"Fold_0" instead of this
+        # repo's usual "name"/"split" column names; accept either.
+        name_col = "name" if "name" in self.split_df.columns else self.split_df.columns[0]
+        split_col = "split" if "split" in self.split_df.columns else self.split_df.columns[1]
+        self.name_to_fold = dict(zip(self.split_df[name_col], self.split_df[split_col]))
 
     def get_splits(self, full_dataset: DATASET) -> Iterator[Tuple[str, Tuple[DATASET]]]:
         """_summary_
