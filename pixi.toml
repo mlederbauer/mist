@@ -1,0 +1,27 @@
+[workspace]
+authors = ["foo"]
+channels = ["pytorch", "conda-forge", "https://conda.anaconda.org/pytorch"]
+name = "mist"
+platforms = ["linux-64"]
+version = "0.1.0"
+
+[tasks]
+
+[dependencies]
+python = "3.8.*"
+matplotlib = "3.4.*"
+rdkit = "2021.3.*"
+pytorch-lightning = "1.6.*"
+einops = "*"
+pip = "21.2.*"
+ipykernel = "6.0.*"
+pytorch = { version = "1.9.*", channel = "pytorch" }
+mkl = "2024.0.*"
+nb_conda_kernels = "2.3.*"
+seaborn = "0.11.*"
+h5py = "*"
+ray-tune = "*"
+umap-learn = "*"
+optuna = "*"
+cudatoolkit = "11.1.*"
+wandb = ">=0.16.6,<0.17"
