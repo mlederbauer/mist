@@ -25,6 +25,13 @@ def add_hyperopt_args(parser):
     ha.add_argument("--max-concurrent", default=10, type=int)
     ha.add_argument("--tune-checkpoint", default=None)
     ha.add_argument("--tune-save", default=False, action="store_true")
+    ha.add_argument(
+        "--train-subsample-frac",
+        default=None,
+        type=float,
+        help="If set, randomly subsample this fraction of the training set for each trial "
+        "(faster search; val/test are left full-size). E.g. 0.1 for a 10%% subsample.",
+    )
 
     # Overwrite default savedir
     time_name = datetime.now().strftime("%Y_%m_%d")

@@ -12,6 +12,7 @@ from pathlib import Path
 from typing import List, Dict
 from functools import partial
 
+import numpy as np
 import pytorch_lightning as pl
 import torch
 from ray import tune
@@ -63,6 +64,14 @@ def score_function(
 
     # Redefine splitter s.t. this splits three times and remove subsetting
     split_name, (train, val, _test) = my_splitter.get_splits(spectra_mol_pairs)
+
+    subsample_frac = kwargs.get("train_subsample_frac")
+    if subsample_frac is not None:
+        rng = np.random.default_rng(kwargs.get("seed"))
+        num_keep = int(len(train) * subsample_frac)
+        keep_inds = rng.choice(len(train), size=num_keep, replace=False)
+        train = [train[i] for i in keep_inds]
+        logging.info(f"Subsampled train to {num_keep} ({subsample_frac:.0%})")
 
     for name, _data in zip(["train", "val"], [train, val]):
         logging.info(f"Len of {name}: {len(_data)}")

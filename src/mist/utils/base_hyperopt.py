@@ -96,26 +96,38 @@ def run_hyperopt(
         search_algo, max_concurrent=kwargs["max_concurrent"]
     )
 
-    tuner = tune.Tuner(
-        trainable,
-        tune_config=tune.TuneConfig(
-            mode="min",
-            metric=metric,
-            search_alg=search_algo,
-            scheduler=ASHAScheduler(
-                max_t=24 * 60 * 60,
-                time_attr="time_total_s",
-                grace_period=kwargs.get("grace_period"),
-                reduction_factor=2,
-            ),
-            num_samples=kwargs.get("num_h_samples"),
+    # Fixed (not auto-timestamped) experiment name so a preempted/requeued
+    # job lands in the same directory and can auto-resume from it.
+    experiment_name = "hyperopt"
+    experiment_dir = Path(save_dir).resolve() / experiment_name
+    tune_config = tune.TuneConfig(
+        mode="min",
+        metric=metric,
+        search_alg=search_algo,
+        scheduler=ASHAScheduler(
+            max_t=24 * 60 * 60,
+            time_attr="time_total_s",
+            grace_period=kwargs.get("grace_period"),
+            reduction_factor=2,
         ),
-        run_config=RunConfig(name=None, local_dir=kwargs["save_dir"]),
+        num_samples=kwargs.get("num_h_samples"),
     )
+    run_config = RunConfig(name=experiment_name, local_dir=kwargs["save_dir"])
 
-    if kwargs.get("tune_checkpoint") is not None:
-        ckpt = str(Path(kwargs["tune_checkpoint"]).resolve())
-        tuner = tuner.restore(path=ckpt, restart_errored=True)
+    tune_checkpoint = kwargs.get("tune_checkpoint")
+    if tune_checkpoint is None and tune.Tuner.can_restore(experiment_dir):
+        tune_checkpoint = str(experiment_dir)
+
+    if tune_checkpoint is not None:
+        ckpt = str(Path(tune_checkpoint).resolve())
+        logging.info(f"Resuming hyperopt from {ckpt}")
+        tuner = tune.Tuner.restore(
+            path=ckpt, trainable=trainable, resume_errored=True
+        )
+    else:
+        tuner = tune.Tuner(
+            trainable, tune_config=tune_config, run_config=run_config
+        )
 
     results = tuner.fit()
     best_trial = results.get_best_result()
