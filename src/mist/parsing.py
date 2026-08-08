@@ -605,6 +605,18 @@ def add_train_args(parser):
         default=None,
         type=str,
     )
+    ta.add_argument(
+        "--wandb-project",
+        help="If set, also log training to this Weights & Biases project",
+        default=None,
+        type=str,
+    )
+    ta.add_argument(
+        "--wandb-entity",
+        help="W&B entity (team/user) to log runs under",
+        default=None,
+        type=str,
+    )
 
     ta.add_argument(
         "--min-epochs",

@@ -17,6 +17,7 @@ from tqdm import tqdm
 from mist import utils
 from mist.data import featurizers
 from mist.data.data import Spectra, Mol
+from mist.utils.hdf5_utils import Hdf5Store, is_hdf5_path
 
 
 def get_paired_spectra(
@@ -57,16 +58,30 @@ def get_paired_spectra(
 
     # Note, loading has moved to the dataloader itself
     logging.info(f"Loading paired specs")
-    spec_folder = Path(spec_folder) if spec_folder is not None else None
 
-    # Resolve for full path
-    if spec_folder is not None and spec_folder.exists():
-        spectra_files = [Path(i).resolve() for i in spec_folder.glob("*.ms")]
+    spectra_hdf5 = None
+    if spec_folder is not None and is_hdf5_path(spec_folder):
+        # Packed format: a single .hdf5 keyed by "{spec}.ms" instead of a
+        # directory of individual .ms files. Drive candidates from the
+        # labels file (already in hand) and do single-key membership
+        # checks, rather than listing every key in the store -- for
+        # large hdf5 files, a full listing is a slow B-tree walk while a
+        # per-key `in` check is a cheap hash lookup.
+        spectra_hdf5 = Hdf5Store(spec_folder)
+        candidate_names = list(name_to_formula) if max_count is None else list(name_to_formula)[:max_count]
+        spectra_files = [
+            Path(f"{name}.ms") for name in candidate_names if f"{name}.ms" in spectra_hdf5
+        ]
     else:
-        logging.info(
-            f"Unable to find spec folder {str(spec_folder)}, adding placeholders"
-        )
-        spectra_files = [Path(f"{i}.ms") for i in name_to_formula]
+        spec_folder = Path(spec_folder) if spec_folder is not None else None
+        # Resolve for full path
+        if spec_folder is not None and spec_folder.exists():
+            spectra_files = [Path(i).resolve() for i in spec_folder.glob("*.ms")]
+        else:
+            logging.info(
+                f"Unable to find spec folder {str(spec_folder)}, adding placeholders"
+            )
+            spectra_files = [Path(f"{i}.ms") for i in name_to_formula]
 
     if max_count is not None:
         spectra_files = spectra_files[:max_count]
@@ -94,6 +109,8 @@ def get_paired_spectra(
             spectra_file=str(spectra_file),
             spectra_formula=spectra_formula,
             instrument=instrument,
+            spectra_hdf5=spectra_hdf5,
+            spectra_hdf5_key=spectra_file.name if spectra_hdf5 is not None else None,
             **kwargs,
         )
         for spectra_name, spectra_file, spectra_formula, instrument in tq(

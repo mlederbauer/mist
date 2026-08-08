@@ -18,7 +18,26 @@ def parse_spectra(spectra_file: str) -> Tuple[dict, List[Tuple[str, np.ndarray]]
         Tuple[dict, List[Tuple[str, np.ndarray]]]: metadata and list of spectra
             tuples containing name and array
     """
-    lines = [i.strip() for i in open(spectra_file, "r").readlines()]
+    text = open(spectra_file, "r").read()
+    return parse_spectra_str(text, file_name=spectra_file)
+
+
+def parse_spectra_str(
+    text: str, file_name: str = ""
+) -> Tuple[dict, List[Tuple[str, np.ndarray]]]:
+    """parse_spectra_str.
+
+    Same as parse_spectra, but parses already-in-memory .ms file text
+    (e.g., read out of an hdf5 store) instead of opening a file.
+
+    Args:
+        text (str): Raw .ms file contents
+        file_name (str): Name to stamp into _FILE_PATH/_FILE metadata
+    Return:
+        Tuple[dict, List[Tuple[str, np.ndarray]]]: metadata and list of spectra
+            tuples containing name and array
+    """
+    lines = [i.strip() for i in text.splitlines()]
 
     group_num = 0
     metadata = {}
@@ -63,8 +82,8 @@ def parse_spectra(spectra_file: str) -> Tuple[dict, List[Tuple[str, np.ndarray]]
             metadata.update(entries)
         group_num += 1
 
-    metadata["_FILE_PATH"] = spectra_file
-    metadata["_FILE"] = Path(spectra_file).stem
+    metadata["_FILE_PATH"] = file_name
+    metadata["_FILE"] = Path(file_name).stem if file_name else ""
     return metadata, spectras
 
 

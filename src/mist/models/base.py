@@ -229,6 +229,8 @@ class TorchModel(pl.LightningModule):
         prog_bars: bool = True,
         tune_save: bool = False,
         debug: str = None,
+        wandb_project: str = None,
+        wandb_entity: str = None,
         **kwargs,
     ) -> List[dict]:
         """_summary_
@@ -267,6 +269,15 @@ class TorchModel(pl.LightningModule):
         )
         callbacks = []
         loggers = [tb_logger]
+
+        if wandb_project is not None and not tune:
+            wandb_logger = pl_loggers.WandbLogger(
+                project=wandb_project,
+                entity=wandb_entity,
+                name=log_version or log_name,
+                save_dir=save_dir,
+            )
+            loggers.append(wandb_logger)
 
         val_check_interval = 1.0
 

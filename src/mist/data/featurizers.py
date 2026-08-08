@@ -5,6 +5,7 @@ Hold featurizers & collate fns for various spectra and molecules in a single
 file
 """
 from pathlib import Path
+import io
 import logging
 from abc import ABC, abstractmethod
 from typing import List, Dict, Callable
@@ -21,6 +22,18 @@ from rdkit.Chem.rdMolDescriptors import GetMACCSKeysFingerprint
 
 from mist import utils
 from mist.data import data
+from mist.utils.hdf5_utils import Hdf5Store, is_hdf5_path
+
+
+def _hdf5_index_path(hdf5_file) -> Path:
+    """Path to a cached spec-name -> key(s) index for a packed hdf5 file.
+
+    Listing all keys in a large hdf5 file is a slow B-tree walk over a
+    network filesystem; build_hdf5_index.py can precompute this once and
+    save it as JSON next to the hdf5 file for fast loading afterward.
+    """
+    hdf5_file = Path(hdf5_file)
+    return hdf5_file.with_name(f"{hdf5_file.stem}_index.json")
 
 
 def get_mol_featurizer(mol_features, **kwargs):
@@ -587,24 +600,81 @@ class PeakFormula(SpecFeaturizer):
         self.max_peaks = max_peaks
         self.inten_transform = inten_transform
         self.aug_nbits = magma_modulo
-        subform_files = list(Path(subform_folder).glob("*.json"))
-        self.spec_name_to_subform_file = {i.stem: i for i in subform_files}
+
+        # Subform trees may be packed one-per-spectrum (spec_name -> single
+        # key) or, like magma, split one-per-(spectrum, collision energy)
+        # (spec_name -> list of keys with a variable "_collision N" suffix
+        # to be concatenated on read). Detect which by whether any key
+        # contains "_collision".
+        self.subform_hdf5 = None
+        if is_hdf5_path(subform_folder):
+            self.subform_hdf5 = Hdf5Store(subform_folder)
+            index_file = _hdf5_index_path(subform_folder)
+            if index_file.exists():
+                logging.info(f"Loading cached key index {index_file}")
+                with open(index_file, "r") as fp:
+                    self.spec_name_to_subform_file = json.load(fp)
+            else:
+                logging.info(
+                    f"Listing all keys in {subform_folder} (one-time cost at dataset "
+                    f"construction; run build_hdf5_index.py to cache this as {index_file})"
+                )
+                name_map = {}
+                for k in self.subform_hdf5.keys():
+                    spec_name = Path(k).stem.split("_collision")[0]
+                    name_map.setdefault(spec_name, []).append(k)
+                self.spec_name_to_subform_file = name_map
+            # Cached/freshly-built index may still be in the old
+            # (one-per-spectrum, scalar value) shape; normalize to lists.
+            self.spec_name_to_subform_file = {
+                k: (v if isinstance(v, list) else [v])
+                for k, v in self.spec_name_to_subform_file.items()
+            }
+        else:
+            subform_files = list(Path(subform_folder).glob("*.json"))
+            self.spec_name_to_subform_file = {i.stem: [i] for i in subform_files}
 
         if self.forward_labels is not None and self.forward_aug_folder is not None:
             self.forward_aug_folder = Path(self.forward_aug_folder)
             subform_files = self.forward_aug_folder.glob("*.json")
-            self.spec_name_to_subform_file.update({i.stem: i for i in subform_files})
+            self.spec_name_to_subform_file.update({i.stem: [i] for i in subform_files})
 
+        # Magma outputs may be split into one file per (spectrum, collision
+        # energy) pair, named "{spec}_collision {energy}.magma" -- collect
+        # all keys/paths for a given spectrum and concat them on read.
+        self.magma_hdf5 = None
         self.spec_name_to_magma_file = {}
         if self.magma_aux_loss:
-            self.magma_folder = Path(magma_folder)
-            name_map = {
-                i: self.magma_folder / f"{i}.magma"
-                for i in self.spec_name_to_subform_file.keys()
-            }
-            self.spec_name_to_magma_file = {
-                k: v for k, v in name_map.items() if v.exists()
-            }
+            if is_hdf5_path(magma_folder):
+                self.magma_hdf5 = Hdf5Store(magma_folder)
+                index_file = _hdf5_index_path(magma_folder)
+                if index_file.exists():
+                    logging.info(f"Loading cached key index {index_file}")
+                    with open(index_file, "r") as fp:
+                        name_map = json.load(fp)
+                else:
+                    logging.info(
+                        f"Listing all keys in {magma_folder} (one-time cost at dataset "
+                        "construction; magma keys carry a variable collision-energy "
+                        f"suffix so a targeted lookup isn't possible; run "
+                        f"build_hdf5_index.py to cache this as {index_file})"
+                    )
+                    name_map = {}
+                    for k in self.magma_hdf5.keys():
+                        spec_name = Path(k).stem.split("_collision")[0]
+                        name_map.setdefault(spec_name, []).append(k)
+                self.spec_name_to_magma_file = {
+                    k: v for k, v in name_map.items() if k in self.spec_name_to_subform_file
+                }
+            else:
+                self.magma_folder = Path(magma_folder)
+                name_map = {
+                    i: [self.magma_folder / f"{i}.magma"]
+                    for i in self.spec_name_to_subform_file.keys()
+                }
+                self.spec_name_to_magma_file = {
+                    k: v for k, v in name_map.items() if v[0].exists()
+                }
 
     def _get_peak_dict(self, spec: data.Spectra) -> dict:
         """_get_peak_dict.
@@ -617,26 +687,33 @@ class PeakFormula(SpecFeaturizer):
         """
         spec_name = spec.get_spec_name()
 
-        subform_file = Path(self.spec_name_to_subform_file[spec_name])
+        # One or more subform trees for this spectrum (e.g. one per
+        # collision energy); same root candidate, pool their peak lists.
+        subform_entries = self.spec_name_to_subform_file[spec_name]
+        trees = []
+        for subform_entry in subform_entries:
+            if self.subform_hdf5 is not None:
+                trees.append(json.loads(self.subform_hdf5[subform_entry]))
+            else:
+                subform_file = Path(subform_entry)
+                if not subform_file.exists():
+                    continue
+                with open(subform_file, "r") as fp:
+                    trees.append(json.load(fp))
 
-        if not subform_file.exists():
+        if not trees:
             return {}
 
-        with open(subform_file, "r") as fp:
-            tree = json.load(fp)
+        root_form = trees[0]["cand_form"]
+        root_ion = trees[0]["cand_ion"]
 
-        root_form = tree["cand_form"]
-        root_ion = tree["cand_ion"]
-        output_tbl = tree["output_tbl"]
-
-        if output_tbl is None:
-            frags = []
-            intens = []
-            ions = []
-        else:
-            frags = output_tbl["formula"]
-            intens = output_tbl["ms2_inten"]
-            ions = output_tbl["ions"]
+        frags, intens, ions = [], [], []
+        for tree in trees:
+            output_tbl = tree["output_tbl"]
+            if output_tbl is not None:
+                frags.extend(output_tbl["formula"])
+                intens.extend(output_tbl["ms2_inten"])
+                ions.extend(output_tbl["ions"])
 
         out_dict = {
             "frags": frags,
@@ -816,10 +893,20 @@ class PeakFormula(SpecFeaturizer):
         forms_vec = np.array(forms_vec)  # / utils.NORM_VEC[None, :]
 
         # Add in magma supervision!
-        magma_file = self.spec_name_to_magma_file.get(spec_name)
+        magma_entries = self.spec_name_to_magma_file.get(spec_name)
         fingerprints = np.zeros((forms_vec.shape[0], self.aug_nbits)) - 1
-        if self.magma_aux_loss and magma_file is not None:
-            magma_df = pd.read_csv(magma_file, sep="\t")
+        if self.magma_aux_loss and magma_entries is not None:
+            if self.magma_hdf5 is not None:
+                # One or more per-collision-energy TSVs for this spectrum
+                magma_df = pd.concat(
+                    [
+                        pd.read_csv(io.StringIO(self.magma_hdf5[k]), sep="\t")
+                        for k in magma_entries
+                    ],
+                    ignore_index=True,
+                )
+            else:
+                magma_df = pd.read_csv(magma_entries[0], sep="\t")
             if len(magma_df) > 0:
                 mz_vec = np.array(mz_vec)
                 magma_masses = magma_df["mz_corrected"].values

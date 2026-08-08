@@ -15,6 +15,8 @@ class Spectra(object):
         spectra_file: str = "",
         spectra_formula: str = "",
         instrument: str = "",
+        spectra_hdf5=None,
+        spectra_hdf5_key: str = None,
         **kwargs,
     ):
         """_summary_
@@ -24,11 +26,18 @@ class Spectra(object):
             spectra_file (str, optional): _description_. Defaults to "".
             spectra_formula (str, optional): _description_. Defaults to "".
             instrument (str, optional): _description_. Defaults to "".
+            spectra_hdf5 (Hdf5Store, optional): If given, spectra text is
+                read from this store under spectra_hdf5_key instead of
+                opening spectra_file directly. Defaults to None.
+            spectra_hdf5_key (str, optional): Key into spectra_hdf5. Defaults
+                to None.
         """
         self.spectra_name = spectra_name
         self.spectra_file = spectra_file
         self.formula = spectra_formula
         self.instrument = instrument
+        self.spectra_hdf5 = spectra_hdf5
+        self.spectra_hdf5_key = spectra_hdf5_key
 
         ##
         self._is_loaded = False
@@ -43,7 +52,13 @@ class Spectra(object):
 
     def _load_spectra(self):
         """Load the spectra from files"""
-        meta, spectrum_tuples = utils.parse_spectra(self.spectra_file)
+        if self.spectra_hdf5 is not None:
+            spectra_text = self.spectra_hdf5[self.spectra_hdf5_key]
+            meta, spectrum_tuples = utils.parse_spectra_str(
+                spectra_text, file_name=self.spectra_file
+            )
+        else:
+            meta, spectrum_tuples = utils.parse_spectra(self.spectra_file)
 
         self.meta = meta
         self.parentmass = None
