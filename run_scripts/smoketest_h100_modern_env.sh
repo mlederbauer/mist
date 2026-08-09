@@ -26,7 +26,7 @@ fi
 echo "CUDA_VISIBLE_DEVICES=$CUDA_VISIBLE_DEVICES"
 nvidia-smi -L
 
-pixi run -e modern python -c "
+pixi run python -c "
 import torch
 print('torch', torch.__version__, 'cuda', torch.version.cuda)
 print('device', torch.cuda.get_device_name(0))
@@ -40,7 +40,7 @@ print('matmul on GPU OK, result sum:', y.sum().item())
 
 DATA=/orcd/data/ccoley/001/msms_data/nist23
 
-pixi run -e modern python src/mist/train_mist.py \
+pixi run python src/mist/train_mist.py \
     --debug test \
     --labels-file "$DATA/labels.tsv" \
     --spec-folder "$DATA/spec_files.hdf5" \

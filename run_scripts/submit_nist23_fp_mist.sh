@@ -5,7 +5,7 @@
 #SBATCH --partition=mit_preemptable,mit_normal_gpu,pi_ccoley
 #SBATCH --nodes=1
 #SBATCH --cpus-per-task=16
-#SBATCH --gres=gpu:a100:1
+#SBATCH --gres=gpu:h100:1
 #SBATCH --mem=256G
 #SBATCH --time=24:00:00
 #SBATCH --requeue
