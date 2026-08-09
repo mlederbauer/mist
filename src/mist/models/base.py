@@ -223,6 +223,7 @@ class TorchModel(pl.LightningModule):
         gradient_clip_val=5,
         min_epochs=None,
         gpus=0,
+        gpu_index: int = None,
         log_version=None,
         log_name="",
         patience: int = 20,
@@ -282,6 +283,12 @@ class TorchModel(pl.LightningModule):
         callbacks = []
         loggers = [tb_logger]
 
+        # wandb is only enabled for a single (non-hyperopt) training run.
+        # Concurrent hyperopt trials (n_jobs>1) calling wandb.init()
+        # simultaneously can time out contending for wandb's shared
+        # background service process; not worth the complexity to fix for
+        # what's a nice-to-have during search, so hyperopt trials stick to
+        # TensorBoard + the Optuna study/results table instead.
         if wandb_project is not None and not tune:
             wandb_logger = pl_loggers.WandbLogger(
                 project=wandb_project,
@@ -298,11 +305,8 @@ class TorchModel(pl.LightningModule):
             callbacks.append(last_checkpoint_callback)
             console_logger = utils.ConsoleLogger()
             loggers.append(console_logger)
-        else:
-            tune_callback = utils.TuneReportCallback(["val_loss"], on="validation_end")
-            callbacks.append(tune_callback)
-            if tune_save:
-                callbacks.append(checkpoint_callback)
+        elif tune_save:
+            callbacks.append(checkpoint_callback)
 
         # Set results dir
         earlystop_callback = EarlyStopping(monitor="val_loss", patience=patience)
@@ -315,7 +319,7 @@ class TorchModel(pl.LightningModule):
             gradient_clip_val=gradient_clip_val,
             min_epochs=min_epochs,
             accelerator="gpu" if gpus >= 1 else None,
-            devices=gpus if gpus >= 1 else None,
+            devices=[gpu_index] if gpu_index is not None else (gpus if gpus >= 1 else None),
             logger=loggers,
             enable_progress_bar=prog_bars,
             reload_dataloaders_every_n_epochs=1,
@@ -329,7 +333,8 @@ class TorchModel(pl.LightningModule):
         trainer.fit(self, module, ckpt_path=resume_ckpt)
 
         if tune:
-            return None
+            val_loss = trainer.callback_metrics.get("val_loss")
+            return float(val_loss.item()) if val_loss is not None else float("inf")
 
         # Modify the model after fit with callbacks as inputs
         # This involves loading the model frorm the best checkpoint

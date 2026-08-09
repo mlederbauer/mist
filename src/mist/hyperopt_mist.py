@@ -1,22 +1,21 @@
 """hyperopt_mist.py
 
-Hyperopt parameters
+Hyperopt parameters via a plain Optuna study (no Ray Tune -- Ray's dashboard
+subprocess segfaults on startup on this cluster due to a protobuf version
+conflict with ray-lightning's pin, and Ray's distributed trial orchestration
+isn't needed for a single-node search anyway).
 
 """
-import os
 import copy
 import logging
 import yaml
 import argparse
-from pathlib import Path
 from typing import List, Dict
-from functools import partial
 
+import numpy as np
+import optuna
 import pytorch_lightning as pl
 import torch
-from ray import tune
-from ray.air import session
-from tqdm import tqdm
 
 from mist.utils import base_hyperopt
 from mist import utils, parsing
@@ -24,25 +23,26 @@ from mist.models import mist_model
 from mist.data import datasets, splitter, featurizers
 
 
-def score_function(
-    config,
-    base_args,
-    orig_dir="",
-):
+def score_function(config, base_args, trial_dir, trial_number=0):
     """score_function.
 
     Args:
-        config: All configs passed by hyperoptimizer
+        config: Hyperparameter values suggested for this trial
         base_args: Base arguments
-        orig_dir: ""
-    """
-    # tunedir = tune.get_trial_dir()
-    # Switch s.t. we can use relative data structures
-    os.chdir(orig_dir)
+        trial_dir: Directory to save this trial's checkpoints/logs under
+        trial_number: Optuna trial number, used to round-robin trials
+            across visible GPUs when running several concurrently
 
+    Returns:
+        float: best validation loss seen during training
+    """
     kwargs = copy.deepcopy(base_args)
     kwargs.update(config)
     pl.utilities.seed.seed_everything(kwargs.get("seed"))
+
+    num_gpus = torch.cuda.device_count()
+    if num_gpus > 0:
+        kwargs["gpu_index"] = trial_number % num_gpus
 
     # Split data
     my_splitter = splitter.get_splitter(**kwargs)
@@ -64,6 +64,14 @@ def score_function(
     # Redefine splitter s.t. this splits three times and remove subsetting
     split_name, (train, val, _test) = my_splitter.get_splits(spectra_mol_pairs)
 
+    subsample_frac = kwargs.get("train_subsample_frac")
+    if subsample_frac is not None:
+        rng = np.random.default_rng(kwargs.get("seed"))
+        num_keep = int(len(train) * subsample_frac)
+        keep_inds = rng.choice(len(train), size=num_keep, replace=False)
+        train = [train[i] for i in keep_inds]
+        logging.info(f"Subsampled train to {num_keep} ({subsample_frac:.0%})")
+
     for name, _data in zip(["train", "val"], [train, val]):
         logging.info(f"Len of {name}: {len(_data)}")
 
@@ -83,17 +91,17 @@ def score_function(
         train_dataset, val_dataset, **kwargs
     )
 
-    kwargs["save_dir"] = tune.get_trial_dir()
+    kwargs["save_dir"] = str(trial_dir)
     torch.set_num_threads(1)
 
-    # Train the model and return list of dicts of test loss
-    model.train_model(
+    val_loss = model.train_model(
         spec_dataloader_module,
         log_name="",
         log_version=".",
         tune=True,
         **kwargs,
     )
+    return val_loss
 
 
 def get_args():
