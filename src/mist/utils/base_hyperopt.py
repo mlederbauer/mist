@@ -68,7 +68,12 @@ def run_hyperopt(
     def objective(trial: optuna.Trial) -> float:
         param_space_function(trial)
         trial_dir = save_dir / f"trial_{trial.number}"
-        return score_function(trial.params, base_args=kwargs, trial_dir=trial_dir)
+        return score_function(
+            trial.params,
+            base_args=kwargs,
+            trial_dir=trial_dir,
+            trial_number=trial.number,
+        )
 
     study.optimize(
         objective,

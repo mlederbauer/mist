@@ -23,13 +23,15 @@ from mist.models import mist_model
 from mist.data import datasets, splitter, featurizers
 
 
-def score_function(config, base_args, trial_dir):
+def score_function(config, base_args, trial_dir, trial_number=0):
     """score_function.
 
     Args:
         config: Hyperparameter values suggested for this trial
         base_args: Base arguments
         trial_dir: Directory to save this trial's checkpoints/logs under
+        trial_number: Optuna trial number, used to round-robin trials
+            across visible GPUs when running several concurrently
 
     Returns:
         float: best validation loss seen during training
@@ -37,6 +39,10 @@ def score_function(config, base_args, trial_dir):
     kwargs = copy.deepcopy(base_args)
     kwargs.update(config)
     pl.utilities.seed.seed_everything(kwargs.get("seed"))
+
+    num_gpus = torch.cuda.device_count()
+    if num_gpus > 0:
+        kwargs["gpu_index"] = trial_number % num_gpus
 
     # Split data
     my_splitter = splitter.get_splitter(**kwargs)
