@@ -1,22 +1,18 @@
 """ base_hyperopt.py
 
-Abstract away common hyperopt functionality
+Abstract away common hyperopt functionality. Drives a plain Optuna study
+(no Ray Tune -- Ray's dashboard subprocess segfaults on startup on this
+cluster due to a protobuf version conflict with ray-lightning's pin, and
+its distributed trial orchestration isn't needed for a single-node search).
 
 """
 import logging
 import yaml
 from pathlib import Path
-from datetime import datetime
 from typing import Callable
 
+import optuna
 import pytorch_lightning as pl
-
-import ray
-from ray import tune
-from ray.air.config import RunConfig
-from ray.tune.search import ConcurrencyLimiter
-from ray.tune.search.optuna import OptunaSearch
-from ray.tune.schedulers.async_hyperband import ASHAScheduler
 
 import mist.utils as utils
 
@@ -26,118 +22,70 @@ def run_hyperopt(
     score_function: Callable,
     param_space_function: Callable,
     initial_points: list,
-    gen_shared_data: Callable = lambda params: {},
 ):
     """run_hyperopt.
 
     Args:
         kwargs: All dictionary args for hyperopt and train
-        score_function: Trainable function that sets up model train
-        param_space_function: Function to suggest new params
-        initial_points: List of initial params to try
+        score_function: score_function(config, base_args, trial_dir) -> val_loss
+        param_space_function: Optuna objective-style function(trial) that
+            calls trial.suggest_* to build a config
+        initial_points: List of initial params to try first
     """
-    # init ray with new session
-    ray.init()  # address="local")
     kwargs["prog_bars"] = False
-
-    # Fix base_args based upon tune args
-    kwargs["gpu"] = kwargs.get("gpus_per_trial", 0) > 0
-    # max_t = args.max_epochs
 
     if kwargs["debug"]:
         kwargs["num_h_samples"] = 10
         kwargs["max_epochs"] = 5
 
-    save_dir = kwargs["save_dir"]
+    save_dir = Path(kwargs["save_dir"]).resolve()
+    save_dir.mkdir(parents=True, exist_ok=True)
     utils.setup_logger(
-        save_dir, log_name="hyperopt.log", debug=kwargs.get("debug", False)
+        str(save_dir), log_name="hyperopt.log", debug=kwargs.get("debug", False)
     )
     pl.utilities.seed.seed_everything(kwargs.get("seed"))
 
-    shared_args = gen_shared_data(kwargs)
-
-    # Define score function
-    trainable = tune.with_parameters(
-        score_function, base_args=kwargs, orig_dir=Path().resolve(), **shared_args
-    )
-
-    # Dump args
     yaml_args = yaml.dump(kwargs)
     logging.info(f"\n{yaml_args}")
-    with open(Path(save_dir) / "args.yaml", "w") as fp:
+    with open(save_dir / "args.yaml", "w") as fp:
         fp.write(yaml_args)
 
-    metric = "val_loss"
+    # SQLite-backed study: a job resubmitted (e.g. after preemption) with the
+    # same --save-dir picks up exactly where the study left off, with no
+    # separate checkpoint path to track. A trial that was mid-training at
+    # the moment of preemption is not resumed mid-epoch -- Optuna marks it
+    # incomplete and it's retried fresh.
+    study = optuna.create_study(
+        storage=f"sqlite:///{save_dir / 'study.db'}",
+        study_name="hyperopt",
+        direction="minimize",
+        load_if_exists=True,
+    )
+    if not study.trials:
+        for params in initial_points:
+            study.enqueue_trial(params)
 
-    # Include cpus and gpus per trial
-    trainable = tune.with_resources(
-        trainable,
-        resources=tune.PlacementGroupFactory(
-            [
-                {
-                    "CPU": kwargs.get("cpus_per_trial"),
-                    "GPU": kwargs.get("gpus_per_trial"),
-                },
-                {
-                    "CPU": kwargs.get("num_workers"),
-                },
-            ],
-            strategy="PACK",
-        ),
+    def objective(trial: optuna.Trial) -> float:
+        param_space_function(trial)
+        trial_dir = save_dir / f"trial_{trial.number}"
+        return score_function(trial.params, base_args=kwargs, trial_dir=trial_dir)
+
+    study.optimize(
+        objective,
+        n_trials=kwargs.get("num_h_samples"),
+        n_jobs=kwargs.get("max_concurrent", 1),
     )
 
-    search_algo = OptunaSearch(
-        metric=metric,
-        mode="min",
-        points_to_evaluate=initial_points,
-        space=param_space_function,
-    )
-    search_algo = ConcurrencyLimiter(
-        search_algo, max_concurrent=kwargs["max_concurrent"]
-    )
-
-    # Fixed (not auto-timestamped) experiment name so a preempted/requeued
-    # job lands in the same directory and can auto-resume from it.
-    experiment_name = "hyperopt"
-    experiment_dir = Path(save_dir).resolve() / experiment_name
-    tune_config = tune.TuneConfig(
-        mode="min",
-        metric=metric,
-        search_alg=search_algo,
-        scheduler=ASHAScheduler(
-            max_t=24 * 60 * 60,
-            time_attr="time_total_s",
-            grace_period=kwargs.get("grace_period"),
-            reduction_factor=2,
-        ),
-        num_samples=kwargs.get("num_h_samples"),
-    )
-    run_config = RunConfig(name=experiment_name, local_dir=kwargs["save_dir"])
-
-    tune_checkpoint = kwargs.get("tune_checkpoint")
-    if tune_checkpoint is None and tune.Tuner.can_restore(experiment_dir):
-        tune_checkpoint = str(experiment_dir)
-
-    if tune_checkpoint is not None:
-        ckpt = str(Path(tune_checkpoint).resolve())
-        logging.info(f"Resuming hyperopt from {ckpt}")
-        tuner = tune.Tuner.restore(
-            path=ckpt, trainable=trainable, resume_errored=True
-        )
+    completed = [
+        t for t in study.trials if t.state == optuna.trial.TrialState.COMPLETE
+    ]
+    if completed:
+        output = {"score": study.best_value, "config": study.best_params}
+        out_str = yaml.dump(output, indent=2)
+        logging.info(out_str)
+        with open(save_dir / "best_trial.yaml", "w") as f:
+            f.write(out_str)
     else:
-        tuner = tune.Tuner(
-            trainable, tune_config=tune_config, run_config=run_config
-        )
+        logging.warning("No trials completed successfully; skipping best_trial.yaml")
 
-    results = tuner.fit()
-    best_trial = results.get_best_result()
-    output = {"score": best_trial.metrics[metric], "config": best_trial.config}
-    out_str = yaml.dump(output, indent=2)
-    logging.info(out_str)
-    with open(Path(save_dir) / "best_trial.yaml", "w") as f:
-        f.write(out_str)
-
-    # Output full res table
-    results.get_dataframe().to_csv(
-        Path(save_dir) / "full_res_tbl.tsv", sep="\t", index=None
-    )
+    study.trials_dataframe().to_csv(save_dir / "full_res_tbl.tsv", sep="\t", index=None)

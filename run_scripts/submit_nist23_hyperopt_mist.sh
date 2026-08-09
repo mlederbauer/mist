@@ -5,8 +5,8 @@
 #SBATCH --partition=mit_preemptable,mit_normal_gpu,pi_ccoley
 #SBATCH --nodes=1
 #SBATCH --cpus-per-task=16
-#SBATCH --gres=gpu:a100:1
-#SBATCH --mem=256G
+#SBATCH --gres=gpu:l40s:1
+#SBATCH --mem=128G
 #SBATCH --time=48:00:00
 #SBATCH --requeue
 #SBATCH --signal=B:USR1@120
@@ -30,14 +30,14 @@ fi
 echo "CUDA_VISIBLE_DEVICES=$CUDA_VISIBLE_DEVICES"
 nvidia-smi -L
 
-# Signal handler for preemptable node termination. Ray Tune itself receives
-# and handles the termination; this just avoids an abrupt kill so the
-# already-running trials get a chance to finish their current step and
+# Signal handler for preemptable node termination -- avoids an abrupt kill
+# so already-running trials get a chance to finish their current step and
 # write their (--tune-save) checkpoint before the node is reclaimed. The
-# STUDY (which trials have run, best-so-far) auto-resumes on --requeue via
-# base_hyperopt.py's fixed experiment_dir + Tuner.restore. Any ONE trial
-# that was mid-epoch at the moment of preemption is not resumed mid-epoch
-# -- Ray marks it errored and it is retried fresh on resume.
+# STUDY (which trials have run, best-so-far) auto-resumes on --requeue since
+# it's backed by a SQLite file at --save-dir/study.db (optuna.create_study
+# with load_if_exists=True in base_hyperopt.py). Any ONE trial that was
+# mid-epoch at the moment of preemption is not resumed mid-epoch -- it's
+# left incomplete in the study and retried fresh on resume.
 handle_preemption() {
     echo "Received preemption signal (SIGUSR1) at $(date)"
     echo "Job will be terminated soon, saving checkpoint..."
@@ -71,8 +71,6 @@ pixi run python src/mist/hyperopt_mist.py \
     --iterative-preds growing \
     --loss-fn cosine \
     --train-subsample-frac 0.1 \
-    --cpus-per-trial 5 \
-    --gpus-per-trial 0.33 \
     --num-h-samples 30 \
     --max-concurrent 3 \
     --num-workers 5 \
