@@ -38,7 +38,7 @@ def score_function(config, base_args, trial_dir, trial_number=0):
     """
     kwargs = copy.deepcopy(base_args)
     kwargs.update(config)
-    pl.utilities.seed.seed_everything(kwargs.get("seed"))
+    pl.seed_everything(kwargs.get("seed"))
 
     num_gpus = torch.cuda.device_count()
     if num_gpus > 0:
