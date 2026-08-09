@@ -13,10 +13,10 @@ import yaml
 import pytorch_lightning as pl
 
 from pytorch_lightning.utilities.rank_zero import rank_zero_only
-from pytorch_lightning.loggers.base import LightningLoggerBase, rank_zero_experiment
+from pytorch_lightning.loggers.logger import Logger, rank_zero_experiment
 
 
-class ConsoleLogger(LightningLoggerBase):
+class ConsoleLogger(Logger):
     """Custom console logger class"""
 
     def __init__(self):
@@ -65,7 +65,7 @@ def setup_train(save_dir: Path, kwargs):
 
     """
     # Seed everything
-    pl.utilities.seed.seed_everything(kwargs.get("seed"))
+    pl.seed_everything(kwargs.get("seed"))
 
     # Define default root dir
     setup_logger(save_dir, debug=kwargs["debug"])

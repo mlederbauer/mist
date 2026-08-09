@@ -8,6 +8,34 @@ version = "0.1.0"
 [tasks]
 
 [dependencies]
+python = "3.11.*"
+matplotlib = "*"
+rdkit = "*"
+einops = "*"
+pip = "*"
+ipykernel = "*"
+mkl = "*"
+nb_conda_kernels = "*"
+seaborn = "*"
+h5py = "*"
+umap-learn = "*"
+optuna = "*"
+wandb = ">=0.16.6"
+pathos = "*"
+multiprocess = "*"
+tqdm = "*"
+numpy = "*"
+pandas = "*"
+scikit-learn = "*"
+pyyaml = "*"
+cairosvg = "*"
+tensorboard = "*"
+
+[pypi-dependencies]
+torch = { version = ">=2.5.0", index = "https://download.pytorch.org/whl/cu121" }
+pytorch-lightning = ">=2.6"
+
+[feature.legacy.dependencies]
 python = "3.8.*"
 matplotlib = "3.4.*"
 rdkit = "2021.3.*"
@@ -20,8 +48,13 @@ mkl = "2024.0.*"
 nb_conda_kernels = "2.3.*"
 seaborn = "0.11.*"
 h5py = "*"
-ray-tune = "*"
 umap-learn = "*"
 optuna = "*"
 cudatoolkit = "11.1.*"
 wandb = ">=0.16.6,<0.17"
+pathos = "*"
+multiprocess = "*"
+tqdm = "*"
+
+[environments]
+legacy = { features = ["legacy"], no-default-feature = true }

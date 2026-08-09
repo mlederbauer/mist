@@ -43,7 +43,7 @@ def run_hyperopt(
     utils.setup_logger(
         str(save_dir), log_name="hyperopt.log", debug=kwargs.get("debug", False)
     )
-    pl.utilities.seed.seed_everything(kwargs.get("seed"))
+    pl.seed_everything(kwargs.get("seed"))
 
     yaml_args = yaml.dump(kwargs)
     logging.info(f"\n{yaml_args}")
