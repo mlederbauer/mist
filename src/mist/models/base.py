@@ -6,8 +6,9 @@ including certain superclasses of models
 """
 import logging
 import math
+from abc import ABC, abstractmethod
 from pathlib import Path
-from typing import List, Optional
+from typing import List, Optional, Tuple
 
 import numpy as np
 import torch
@@ -43,11 +44,19 @@ def build_model(model, **kwargs):
     return get_model_class(model)(**kwargs)
 
 
-class TorchModel(pl.LightningModule):
+class TorchModel(pl.LightningModule, ABC):
     """TorchModel.
 
-    Parent class to hold SpectraModels.
+    Parent class to hold SpectraModels. Subclasses (MistNet, FingerIDFFN,
+    ContrastiveModel, FingerIDXFormer) must implement encode_spectra,
+    encode_mol, mol_features, training_step, validation_step, and test_step
+    -- this was already the de facto contract every subclass honored, now
+    enforced at class-definition time instead of failing at call time.
 
+    spec_features, compute_loss, and dataset_type are deliberately NOT
+    abstract: ContrastiveModel wraps another TorchModel (self.main_model)
+    and delegates to it for spec_features/compute_loss rather than
+    implementing them itself, so those can't be a hard requirement here.
     """
 
     def __init__(
@@ -103,6 +112,19 @@ class TorchModel(pl.LightningModule):
 
     def forward(self, batch):
         raise NotImplementedError()
+
+    @abstractmethod
+    def encode_spectra(self, batch: dict, **kwargs) -> Tuple[torch.Tensor, dict]:
+        """Encode a batch of spectra into (embedding, aux_outputs)."""
+
+    @abstractmethod
+    def encode_mol(self, batch: dict, **kwargs) -> Tuple[torch.Tensor, dict]:
+        """Encode a batch of molecules into (embedding, aux_outputs)."""
+
+    @staticmethod
+    @abstractmethod
+    def mol_features(mode: Optional[str] = None) -> str:
+        """Name of the molecule featurization this model expects."""
 
     def set_results_dir(self, dir_):
         """Set the results dir to store misc info"""
@@ -174,11 +196,17 @@ class TorchModel(pl.LightningModule):
                 stacked_mols = torch.cat(mol_outputs, 0)
         return stacked_mols
 
+    @abstractmethod
     def training_step(self, batch, batch_idx):
-        raise NotImplementedError()
+        """Compute and return the training loss for one batch."""
 
+    @abstractmethod
     def validation_step(self, batch, batch_idx):
-        raise NotImplementedError()
+        """Compute and log the validation loss for one batch."""
+
+    @abstractmethod
+    def test_step(self, batch, batch_idx):
+        """Compute and log the test loss for one batch."""
 
     def post_train_modify(self, _checkpoint_callback, debug=False, **kwargs):
         """On fit end, load the best checkpoint"""

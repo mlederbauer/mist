@@ -1,6 +1,6 @@
 """ data.py """
 import logging
-from typing import Optional
+from typing import List, Optional
 import re
 
 from rdkit import Chem
@@ -15,6 +15,7 @@ class Spectra(object):
         spectra_file: str = "",
         spectra_formula: str = "",
         instrument: str = "",
+        related_structures: List[str] = [],
         spectra_hdf5=None,
         spectra_hdf5_key: str = None,
         **kwargs,
@@ -26,6 +27,10 @@ class Spectra(object):
             spectra_file (str, optional): _description_. Defaults to "".
             spectra_formula (str, optional): _description_. Defaults to "".
             instrument (str, optional): _description_. Defaults to "".
+            related_structures (List[str], optional): Known SMILES
+                associated with this spectrum (e.g. reaction starting
+                materials), used for auxiliary model conditioning. Defaults
+                to [].
             spectra_hdf5 (Hdf5Store, optional): If given, spectra text is
                 read from this store under spectra_hdf5_key instead of
                 opening spectra_file directly. Defaults to None.
@@ -36,6 +41,7 @@ class Spectra(object):
         self.spectra_file = spectra_file
         self.formula = spectra_formula
         self.instrument = instrument
+        self.related_structures = related_structures
         self.spectra_hdf5 = spectra_hdf5
         self.spectra_hdf5_key = spectra_hdf5_key
 
@@ -49,6 +55,9 @@ class Spectra(object):
 
     def get_instrument(self):
         return self.instrument
+
+    def get_related_structures(self) -> List[str]:
+        return self.related_structures
 
     def _load_spectra(self):
         """Load the spectra from files"""

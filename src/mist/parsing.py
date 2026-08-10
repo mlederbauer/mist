@@ -30,7 +30,18 @@ def add_hyperopt_args(parser):
         default=None,
         type=float,
         help="If set, randomly subsample this fraction of the training set for each trial "
-        "(faster search; val/test are left full-size). E.g. 0.1 for a 10%% subsample.",
+        "(faster search; val/test are left full-size unless --val-subsample-frac is also "
+        "set). E.g. 0.1 for a 10%% subsample.",
+    )
+    ha.add_argument(
+        "--val-subsample-frac",
+        default=None,
+        type=float,
+        help="If set, randomly subsample this fraction of the validation set for each trial "
+        "(faster search -- val is otherwise always full-size regardless of "
+        "--train-subsample-frac, and dominates per-epoch time at small train subsamples). "
+        "Fine for comparing configs during search; re-validate the winning config(s) on "
+        "the full val set afterward.",
     )
 
     # Overwrite default savedir
@@ -440,6 +451,30 @@ def add_mist_args(parser):
         help="Set pooling strategy",
         choices=["intensity", "root", "mean", "cls"],
         default="cls",
+    )
+
+    ma.add_argument(
+        "--aux-dim",
+        default=0,
+        type=int,
+        help=(
+            "Width of the auxiliary molecular conditioning vector "
+            "(mean-pooled fingerprint of a spectrum's related-structure "
+            "SMILES, see mist.data.aux_featurizers). 0 (default) disables "
+            "aux conditioning entirely -- a true no-op vs. not having this "
+            "feature."
+        ),
+    )
+    ma.add_argument(
+        "--aux-dropout",
+        default=0.2,
+        type=float,
+        help=(
+            "Training-time probability of dropping present aux "
+            "conditioning data for an example, so the model doesn't learn "
+            "to depend on it always being there. Only applies when "
+            "--aux-dim > 0."
+        ),
     )
 
     return ma

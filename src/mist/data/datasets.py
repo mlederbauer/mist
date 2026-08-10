@@ -15,7 +15,7 @@ from torch.utils.data import DataLoader
 from tqdm import tqdm
 
 from mist import utils
-from mist.data import featurizers
+from mist.data import featurizers, aux_featurizers
 from mist.data.data import Spectra, Mol
 from mist.utils.hdf5_utils import Hdf5Store, is_hdf5_path
 
@@ -55,6 +55,16 @@ def get_paired_spectra(
     name_to_instrument = {}
     if "instrument" in compound_id_file.keys():
         name_to_instrument = dict(compound_id_file[["spec", "instrument"]].values)
+
+    name_to_related_structures = {}
+    if "related_structures" in compound_id_file.keys():
+        # compound_id_file is .astype(str) above, so an empty/NaN cell reads
+        # here as the literal string "nan" -- filter it like an empty cell,
+        # not a real (unparseable) SMILES.
+        name_to_related_structures = {
+            spec: [s for s in str(val).split(";") if s and s != "nan"]
+            for spec, val in compound_id_file[["spec", "related_structures"]].values
+        }
 
     # Note, loading has moved to the dataloader itself
     logging.info(f"Loading paired specs")
@@ -98,6 +108,10 @@ def get_paired_spectra(
     spectra_instruments = [
         name_to_instrument.get(spectra_name, "") for spectra_name in spectra_names
     ]
+    spectra_related_structures = [
+        name_to_related_structures.get(spectra_name, [])
+        for spectra_name in spectra_names
+    ]
 
     logging.info(f"Converting paired samples into Spectra objects")
 
@@ -109,12 +123,19 @@ def get_paired_spectra(
             spectra_file=str(spectra_file),
             spectra_formula=spectra_formula,
             instrument=instrument,
+            related_structures=related_structures,
             spectra_hdf5=spectra_hdf5,
             spectra_hdf5_key=spectra_file.name if spectra_hdf5 is not None else None,
             **kwargs,
         )
-        for spectra_name, spectra_file, spectra_formula, instrument in tq(
-            zip(spectra_names, spectra_files, spectra_formulas, spectra_instruments)
+        for spectra_name, spectra_file, spectra_formula, instrument, related_structures in tq(
+            zip(
+                spectra_names,
+                spectra_files,
+                spectra_formulas,
+                spectra_instruments,
+                spectra_related_structures,
+            )
         )
     ]
 
@@ -205,12 +226,25 @@ class SpectraMolDataset(Dataset):
         fp_names: list = [],
         frac_orig: float = 0.4,
         forward_aug_folder=None,
+        aux_dim: int = 0,
+        aux_dropout: float = 0.2,
         **kwargs,
     ):
         self.forward_labels = forward_labels
         self.fp_names = fp_names
         self.frac_orig = frac_orig
         self.forward_aug_folder = forward_aug_folder
+
+        # Aux molecular conditioning (see mist.data.aux_featurizers). Off by
+        # default (aux_dim=0) -- a strict no-op, no aux keys added to
+        # batches, so this never affects anyone not using the feature.
+        self.aux_dim = aux_dim
+        self.aux_dropout = aux_dropout
+        self.aux_featurizer = (
+            aux_featurizers.AUX_REGISTRY["related_structures"](fp_names=fp_names)
+            if aux_dim > 0
+            else None
+        )
 
     def upsample_forward(self):
         """add new forward entries"""
@@ -354,13 +388,28 @@ class SpectraMolDataset(Dataset):
         mol_features = self.featurizer.featurize_mol(mol, train_mode=self.train_mode)
         spec_features = self.featurizer.featurize_spec(spec, train_mode=self.train_mode)
 
-        return {
+        out = {
             "spec": [spec_features],
             "mol": [mol_features],
             "spec_indices": [0],
             "mol_indices": [0],
             "matched": [True],
         }
+
+        if self.aux_featurizer is not None:
+            related_structures = spec.get_related_structures()
+            aux_present = len(related_structures) > 0
+            if aux_present and self.train_mode and np.random.random() < self.aux_dropout:
+                aux_present = False
+            aux_vec = (
+                self.aux_featurizer.featurize(related_structures)
+                if aux_present
+                else np.zeros(self.aux_featurizer.dim, dtype=np.float32)
+            )
+            out["aux_vec"] = [aux_vec]
+            out["aux_mask"] = [len(related_structures) > 0]
+
+        return out
 
 
 class SpectraMolMismatchHDFDataset(SpectraMolDataset):
@@ -656,6 +705,18 @@ def _collate_pairs(
     }
     base_dict.update(spec_dict)
     base_dict.update(mol_dict)
+
+    # Aux molecular conditioning (see mist.data.aux_featurizers), one vector
+    # per dataset item -- absent entirely when aux featurization is off, so
+    # this is a strict no-op for anyone not using the feature.
+    if "aux_vec" in input_batch[0]:
+        base_dict["aux_vec"] = torch.tensor(
+            np.array([j for jj in input_batch for j in jj["aux_vec"]]),
+            dtype=torch.float32,
+        )
+        base_dict["aux_mask"] = torch.tensor(
+            [j for jj in input_batch for j in jj["aux_mask"]]
+        )
 
     return base_dict
 

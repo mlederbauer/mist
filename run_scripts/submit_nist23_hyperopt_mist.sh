@@ -2,12 +2,12 @@
 #SBATCH --job-name=nist23_hyperopt_mist
 #SBATCH --output=logs/%x_%j.out
 #SBATCH --error=logs/%x_%j.err
-#SBATCH --partition=pi_ccoley
+#SBATCH --partition=mit_preemptable,mit_normal_gpu,pi_ccoley
 #SBATCH --nodes=1
-#SBATCH --cpus-per-task=16
-#SBATCH --gres=gpu:h100:3
+#SBATCH --cpus-per-task=45
+#SBATCH --gres=gpu:l40s:3
 #SBATCH --mem=256G
-#SBATCH --time=24:00:00
+#SBATCH --time=48:00:00
 #SBATCH --requeue
 #SBATCH --signal=B:USR1@120
 #SBATCH --mail-type=END,FAIL,REQUEUE
@@ -62,7 +62,7 @@ pixi run python src/mist/hyperopt_mist.py \
     --seed 1 \
     --gpus 1 \
     --batch-size 128 \
-    --max-epochs 600 \
+    --max-epochs 100 \
     --pairwise-featurization \
     --set-pooling cls \
     --cls-type ms1 \
@@ -71,9 +71,10 @@ pixi run python src/mist/hyperopt_mist.py \
     --iterative-preds growing \
     --loss-fn cosine \
     --train-subsample-frac 0.1 \
+    --val-subsample-frac 0.15 \
     --num-h-samples 30 \
-    --max-concurrent 3 \
-    --num-workers 5 \
+    --max-concurrent 9 \
+    --num-workers 4 \
     --augment-prob 0.5 \
     --inten-prob 0.12 \
     --remove-prob 0.5 \

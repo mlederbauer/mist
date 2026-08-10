@@ -348,12 +348,14 @@ class MistNet(TorchModel):
         top_layers: int = 1,
         refine_layers: int = 0,
         magma_modulo: int = 2048,
+        aux_dim: int = 0,
         **kwargs,
     ):
         """build_model"""
 
         self.hidden_size = hidden_size
         self.magma_modulo = magma_modulo
+        self.aux_dim = aux_dim
 
         # Can only be less than or equal to 2048
         # if self.magma_modulo > 2048:
@@ -374,19 +376,44 @@ class MistNet(TorchModel):
         fragment_pred_parts.append(nn.Linear(hidden_size, magma_modulo))
         fragment_predictor = nn.Sequential(*fragment_pred_parts)
 
+        # Aux molecular conditioning (see mist.data.aux_featurizers): when
+        # enabled, the fingerprint head's input is [encoder_output, aux_vec]
+        # instead of just encoder_output, so it needs hidden_size + aux_dim
+        # of input width. aux_dim=0 (default) means head_input_dim ==
+        # hidden_size, a byte-identical no-op vs. before this feature existed.
+        head_input_dim = hidden_size + aux_dim
+        if aux_dim > 0:
+            # aux_featurizers.RelatedStructureFeaturizer produces a
+            # fingerprint of the same fp_names/output_size as the model's
+            # own target fingerprint (see aux_featurizers.py), so
+            # self.output_size is the correct input width here.
+            self.aux_projections = nn.ModuleDict(
+                {
+                    "related_structures": nn.Sequential(
+                        nn.Linear(self.output_size, aux_dim),
+                        nn.LayerNorm(aux_dim),
+                    )
+                }
+            )
+
         if self.iterative_preds == "none":
+            # Only the first layer sees the concatenated [encoder_output,
+            # aux_vec] width; every layer after that operates at hidden_size
+            # as before, unaffected by aux_dim.
             top_layer_parts = []
+            in_dim = head_input_dim
             for _ in range(top_layers - 1):
-                top_layer_parts.append(nn.Linear(hidden_size, hidden_size))
+                top_layer_parts.append(nn.Linear(in_dim, hidden_size))
                 top_layer_parts.append(nn.ReLU())
                 top_layer_parts.append(nn.Dropout(spectra_dropout))
+                in_dim = hidden_size
 
-            top_layer_parts.append(nn.Linear(hidden_size, self.output_size))
+            top_layer_parts.append(nn.Linear(in_dim, self.output_size))
             top_layer_parts.append(nn.Sigmoid())
             spectra_predictor = nn.Sequential(*top_layer_parts)
         elif self.iterative_preds in ["growing"]:
             spectra_predictor = modules.FPGrowingModule(
-                hidden_input_dim=hidden_size,
+                hidden_input_dim=head_input_dim,
                 final_target_dim=self.output_size,
                 num_splits=refine_layers,
                 reduce_factor=2,
@@ -409,15 +436,30 @@ class MistNet(TorchModel):
     def mol_features(mode: Optional[str] = None) -> str:
         return "fingerprint"
 
+    def _aux_conditioning_vec(self, batch: dict) -> Optional[torch.Tensor]:
+        """Project aux_vec (see mist.data.aux_featurizers) into aux_dim, or
+        None if aux conditioning is off (aux_dim=0) or absent from this
+        batch."""
+        if self.aux_dim == 0 or "aux_vec" not in batch:
+            return None
+        return self.aux_projections["related_structures"](batch["aux_vec"])
+
     def encode_spectra(self, batch: dict) -> Tuple[torch.Tensor, dict]:
         """encode_spectra."""
+        aux_cond = self._aux_conditioning_vec(batch)
+
         if self.iterative_preds == "none":
             encoder_output, aux_out = self.spectra_encoder[0](batch, return_aux=True)
 
             pred_frag_fps = self.spectra_encoder[1](aux_out["peak_tensor"])
             aux_outputs = {"pred_frag_fps": pred_frag_fps}
 
-            output = self.spectra_encoder[2](encoder_output)
+            head_input = (
+                torch.cat([encoder_output, aux_cond], dim=-1)
+                if aux_cond is not None
+                else encoder_output
+            )
+            output = self.spectra_encoder[2](head_input)
             aux_outputs["h0"] = encoder_output
 
         elif self.iterative_preds == "growing":
@@ -425,7 +467,12 @@ class MistNet(TorchModel):
             pred_frag_fps = self.spectra_encoder[1](aux_out["peak_tensor"])
             aux_outputs = {"pred_frag_fps": pred_frag_fps}
 
-            output = self.spectra_encoder[2](encoder_output)
+            head_input = (
+                torch.cat([encoder_output, aux_cond], dim=-1)
+                if aux_cond is not None
+                else encoder_output
+            )
+            output = self.spectra_encoder[2](head_input)
             intermediates = output[:-1]
             final_output = output[-1]
             aux_outputs["int_preds"] = intermediates

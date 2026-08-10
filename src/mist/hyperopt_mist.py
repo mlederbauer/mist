@@ -64,13 +64,21 @@ def score_function(config, base_args, trial_dir, trial_number=0):
     # Redefine splitter s.t. this splits three times and remove subsetting
     split_name, (train, val, _test) = my_splitter.get_splits(spectra_mol_pairs)
 
+    rng = np.random.default_rng(kwargs.get("seed"))
+
     subsample_frac = kwargs.get("train_subsample_frac")
     if subsample_frac is not None:
-        rng = np.random.default_rng(kwargs.get("seed"))
         num_keep = int(len(train) * subsample_frac)
         keep_inds = rng.choice(len(train), size=num_keep, replace=False)
         train = [train[i] for i in keep_inds]
         logging.info(f"Subsampled train to {num_keep} ({subsample_frac:.0%})")
+
+    val_subsample_frac = kwargs.get("val_subsample_frac")
+    if val_subsample_frac is not None:
+        num_keep = int(len(val) * val_subsample_frac)
+        keep_inds = rng.choice(len(val), size=num_keep, replace=False)
+        val = [val[i] for i in keep_inds]
+        logging.info(f"Subsampled val to {num_keep} ({val_subsample_frac:.0%})")
 
     for name, _data in zip(["train", "val"], [train, val]):
         logging.info(f"Len of {name}: {len(_data)}")
