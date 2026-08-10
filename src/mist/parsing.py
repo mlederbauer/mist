@@ -672,6 +672,18 @@ def add_train_args(parser):
         default=None,
         type=str,
     )
+    ta.add_argument(
+        "--checkpoint-every-n-train-steps",
+        help=(
+            "Save last.ckpt at least this often (in training steps), not just "
+            "once per epoch at validation time. Bounds how much progress a "
+            "hard kill (preemption, node failure) can lose -- important on "
+            "preemptable partitions or with large epochs. Set to a large "
+            "number or 0 to fall back to once-per-epoch saving."
+        ),
+        default=500,
+        type=int,
+    )
 
     ta.add_argument(
         "--min-epochs",

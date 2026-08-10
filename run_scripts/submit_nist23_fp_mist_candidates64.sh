@@ -1,5 +1,5 @@
 #!/bin/bash
-#SBATCH --job-name=nist23_fp_mist_aux64
+#SBATCH --job-name=nist23_fp_mist_candidates64
 #SBATCH --output=logs/%x_%j.out
 #SBATCH --error=logs/%x_%j.err
 #SBATCH --partition=pi_ccoley
@@ -74,9 +74,10 @@ pixi run python src/mist/train_mist.py \
     --no-diffs \
     --aux-dim 64 \
     --aux-dropout 0.2 \
+    --checkpoint-every-n-train-steps 500 \
     --reaction-metadata-file /home/magled/mist/data/nist23/reaction_metadata.tsv \
     --wandb-project mist-nist23 \
-    --save-dir results/nist23_fp_mist_aux64/split_1 &
+    --save-dir results/nist23_fp_mist_candidates64/split_1 &
 
 CHILD_PID=$!
 wait $CHILD_PID

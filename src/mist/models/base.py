@@ -262,6 +262,7 @@ class TorchModel(pl.LightningModule, ABC):
         wandb_project: str = None,
         wandb_entity: str = None,
         wandb_run_name: str = None,
+        checkpoint_every_n_train_steps: Optional[int] = 500,
         **kwargs,
     ) -> List[dict]:
         """_summary_
@@ -302,12 +303,20 @@ class TorchModel(pl.LightningModule, ABC):
         # preempted/requeued job can resume training exactly where it left
         # off, rather than restarting at epoch 0. save_last keeps this
         # updated to the most recent epoch regardless of val_loss.
+        #
+        # every_n_train_steps (default 500, not just the default "once per
+        # epoch at validation time") matters because a hard kill mid-epoch
+        # (e.g. on a preemptable partition, or a node failure that skips the
+        # SIGUSR1 graceful-shutdown path) previously lost everything since
+        # the last epoch boundary -- a real run once lost ~1.5 epochs
+        # (thousands of steps) this way with no last.ckpt to resume from.
         last_ckpt_path = Path(tb_path) / "last.ckpt"
         last_checkpoint_callback = ModelCheckpoint(
             dirpath=tb_path,
             save_last=True,
             save_top_k=0,
             save_weights_only=False,
+            every_n_train_steps=checkpoint_every_n_train_steps,
         )
         callbacks = []
         loggers = [tb_logger]
