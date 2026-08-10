@@ -2,9 +2,9 @@
 
 Auxiliary molecular conditioning sources for fingerprint prediction: given a
 variable-count set of known SMILES associated with a spectrum (e.g. reaction
-starting materials, or other confirmed related structures), produce a single
-fixed-width vector to condition the model on. Registry-shaped so new source
-types can be added without touching the model, dataset key structure, or CLI.
+starting materials or candidate products), produce a single fixed-width
+vector to condition the model on. Registry-shaped so new source types can be
+added without touching the model, dataset key structure, or CLI.
 """
 from typing import List
 
@@ -14,9 +14,9 @@ from mist.data import data
 from mist.data.featurizers import FingerprintFeaturizer
 
 
-class RelatedStructureFeaturizer:
-    """Featurize a variable-count set of related-structure SMILES via mean
-    Morgan fingerprint pooling."""
+class SmilesSetFeaturizer:
+    """Featurize a variable-count set of SMILES (e.g. reaction starting
+    materials, or candidate products) via mean Morgan fingerprint pooling."""
 
     def __init__(self, fp_names: List[str] = ["morgan2048"], **kwargs):
         self._fp_featurizer = FingerprintFeaturizer(fp_names=fp_names)
@@ -43,4 +43,7 @@ class RelatedStructureFeaturizer:
         return np.mean(fps, axis=0).astype(np.float32)
 
 
-AUX_REGISTRY = {"related_structures": RelatedStructureFeaturizer}
+AUX_REGISTRY = {
+    "starting_materials": SmilesSetFeaturizer,
+    "candidates": SmilesSetFeaturizer,
+}

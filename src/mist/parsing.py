@@ -131,6 +131,19 @@ def add_dataset_args(parser):
         type=float,
         help="Frac original data going into each batch",
     )
+    da.add_argument(
+        "--reaction-metadata-file",
+        default=None,
+        action="store",
+        help=(
+            "Path to a reaction_metadata.tsv (see mist.build_reaction_metadata) "
+            "to join by inchikey and explode into one dataset item per "
+            "(spectrum, matched reaction) pair, for auxiliary molecular "
+            "conditioning (--aux-dim). Compounds with no matched reaction pass "
+            "through unchanged. Off by default -- no reaction join happens "
+            "unless this is set."
+        ),
+    )
     return da
 
 

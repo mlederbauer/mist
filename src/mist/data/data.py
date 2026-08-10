@@ -15,7 +15,6 @@ class Spectra(object):
         spectra_file: str = "",
         spectra_formula: str = "",
         instrument: str = "",
-        related_structures: List[str] = [],
         spectra_hdf5=None,
         spectra_hdf5_key: str = None,
         **kwargs,
@@ -27,10 +26,6 @@ class Spectra(object):
             spectra_file (str, optional): _description_. Defaults to "".
             spectra_formula (str, optional): _description_. Defaults to "".
             instrument (str, optional): _description_. Defaults to "".
-            related_structures (List[str], optional): Known SMILES
-                associated with this spectrum (e.g. reaction starting
-                materials), used for auxiliary model conditioning. Defaults
-                to [].
             spectra_hdf5 (Hdf5Store, optional): If given, spectra text is
                 read from this store under spectra_hdf5_key instead of
                 opening spectra_file directly. Defaults to None.
@@ -41,9 +36,17 @@ class Spectra(object):
         self.spectra_file = spectra_file
         self.formula = spectra_formula
         self.instrument = instrument
-        self.related_structures = related_structures
         self.spectra_hdf5 = spectra_hdf5
         self.spectra_hdf5_key = spectra_hdf5_key
+
+        # Auxiliary molecular conditioning data (see mist.data.aux_featurizers),
+        # e.g. {"starting_materials": [...], "candidates": [...]}. Not a
+        # constructor arg -- this is a post-hoc annotation attached by
+        # datasets.explode_with_reactions after Spectra objects already exist
+        # (a reaction match is a property of a (spectrum, reaction) pair, not
+        # something knowable from labels.tsv alone). Empty by default, so any
+        # Spectra not touched by that step behaves exactly as before.
+        self.aux_data = {}
 
         ##
         self._is_loaded = False
@@ -56,8 +59,8 @@ class Spectra(object):
     def get_instrument(self):
         return self.instrument
 
-    def get_related_structures(self) -> List[str]:
-        return self.related_structures
+    def get_aux_data(self, source: str) -> list:
+        return self.aux_data.get(source, [])
 
     def _load_spectra(self):
         """Load the spectra from files"""

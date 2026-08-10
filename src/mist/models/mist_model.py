@@ -5,7 +5,7 @@ import torch
 from torch import nn
 import torch.nn.functional as F
 
-from mist.data import featurizers
+from mist.data import featurizers, aux_featurizers
 from mist.models.base import TorchModel, register_model
 from mist.models import modules
 
@@ -383,16 +383,21 @@ class MistNet(TorchModel):
         # hidden_size, a byte-identical no-op vs. before this feature existed.
         head_input_dim = hidden_size + aux_dim
         if aux_dim > 0:
-            # aux_featurizers.RelatedStructureFeaturizer produces a
-            # fingerprint of the same fp_names/output_size as the model's
-            # own target fingerprint (see aux_featurizers.py), so
-            # self.output_size is the correct input width here.
+            # aux_featurizers.SmilesSetFeaturizer produces a fingerprint of
+            # the same fp_names/output_size as the model's own target
+            # fingerprint (see aux_featurizers.py), so self.output_size is
+            # the correct input width here. One independent projection per
+            # registered source (e.g. starting_materials, candidates) --
+            # each source is separately dropped out at data-loading time and
+            # summed here, not concatenated, so aux_dim stays fixed
+            # regardless of how many sources are configured.
             self.aux_projections = nn.ModuleDict(
                 {
-                    "related_structures": nn.Sequential(
+                    source: nn.Sequential(
                         nn.Linear(self.output_size, aux_dim),
                         nn.LayerNorm(aux_dim),
                     )
+                    for source in aux_featurizers.AUX_REGISTRY
                 }
             )
 
@@ -437,12 +442,20 @@ class MistNet(TorchModel):
         return "fingerprint"
 
     def _aux_conditioning_vec(self, batch: dict) -> Optional[torch.Tensor]:
-        """Project aux_vec (see mist.data.aux_featurizers) into aux_dim, or
-        None if aux conditioning is off (aux_dim=0) or absent from this
-        batch."""
-        if self.aux_dim == 0 or "aux_vec" not in batch:
+        """Sum each present source's projected aux vector (see
+        mist.data.aux_featurizers) into a single aux_dim-width vector, or
+        None if aux conditioning is off (aux_dim=0) or no aux_vec_* key is
+        present in this batch."""
+        if self.aux_dim == 0:
             return None
-        return self.aux_projections["related_structures"](batch["aux_vec"])
+        projected = [
+            self.aux_projections[source](batch[f"aux_vec_{source}"])
+            for source in aux_featurizers.AUX_REGISTRY
+            if f"aux_vec_{source}" in batch
+        ]
+        if not projected:
+            return None
+        return torch.stack(projected, dim=0).sum(dim=0)
 
     def encode_spectra(self, batch: dict) -> Tuple[torch.Tensor, dict]:
         """encode_spectra."""

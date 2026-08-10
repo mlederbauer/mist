@@ -261,6 +261,7 @@ class TorchModel(pl.LightningModule, ABC):
         debug: str = None,
         wandb_project: str = None,
         wandb_entity: str = None,
+        wandb_run_name: str = None,
         **kwargs,
     ) -> List[dict]:
         """_summary_
@@ -321,7 +322,7 @@ class TorchModel(pl.LightningModule, ABC):
             wandb_logger = pl_loggers.WandbLogger(
                 project=wandb_project,
                 entity=wandb_entity,
-                name=log_version or log_name,
+                name=wandb_run_name or log_version or log_name,
                 save_dir=save_dir,
             )
             loggers.append(wandb_logger)

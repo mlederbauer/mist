@@ -1,5 +1,6 @@
 """ datasets.py """
 from pathlib import Path
+import copy
 import pickle
 import h5py
 import logging
@@ -56,16 +57,6 @@ def get_paired_spectra(
     if "instrument" in compound_id_file.keys():
         name_to_instrument = dict(compound_id_file[["spec", "instrument"]].values)
 
-    name_to_related_structures = {}
-    if "related_structures" in compound_id_file.keys():
-        # compound_id_file is .astype(str) above, so an empty/NaN cell reads
-        # here as the literal string "nan" -- filter it like an empty cell,
-        # not a real (unparseable) SMILES.
-        name_to_related_structures = {
-            spec: [s for s in str(val).split(";") if s and s != "nan"]
-            for spec, val in compound_id_file[["spec", "related_structures"]].values
-        }
-
     # Note, loading has moved to the dataloader itself
     logging.info(f"Loading paired specs")
 
@@ -108,10 +99,6 @@ def get_paired_spectra(
     spectra_instruments = [
         name_to_instrument.get(spectra_name, "") for spectra_name in spectra_names
     ]
-    spectra_related_structures = [
-        name_to_related_structures.get(spectra_name, [])
-        for spectra_name in spectra_names
-    ]
 
     logging.info(f"Converting paired samples into Spectra objects")
 
@@ -123,18 +110,16 @@ def get_paired_spectra(
             spectra_file=str(spectra_file),
             spectra_formula=spectra_formula,
             instrument=instrument,
-            related_structures=related_structures,
             spectra_hdf5=spectra_hdf5,
             spectra_hdf5_key=spectra_file.name if spectra_hdf5 is not None else None,
             **kwargs,
         )
-        for spectra_name, spectra_file, spectra_formula, instrument, related_structures in tq(
+        for spectra_name, spectra_file, spectra_formula, instrument in tq(
             zip(
                 spectra_names,
                 spectra_files,
                 spectra_formulas,
                 spectra_instruments,
-                spectra_related_structures,
             )
         )
     ]
@@ -169,6 +154,73 @@ def get_paired_spectra(
 
     logging.info("Done creating spectra objects")
     return (spectra_list, mol_list)
+
+
+def explode_with_reactions(
+    spectra_mol_pairs: List[Tuple[Spectra, Mol]],
+    reaction_metadata_file: str,
+) -> List[Tuple[Spectra, Mol]]:
+    """Join spectra_mol_pairs to reaction_metadata_file by inchikey and
+    explode: one output pair per (original pair, matched reaction row), each
+    carrying that reaction's starting_materials/candidates as aux data (see
+    mist.data.aux_featurizers, Spectra.aux_data).
+
+    A compound with zero matched reactions passes through as a single
+    unchanged pair (no aux data attached -- exactly as if this function were
+    never called for that pair), so nothing is dropped from training for lack
+    of reaction data. A compound with N matched reactions produces N output
+    pairs, each a distinct (shallow) copy of the original Spectra with its
+    own aux_data -- no cap on N (see CLAUDE.md: some compounds, e.g. common
+    salt-forming counter-ions, match thousands of incidental reactions; left
+    unfiltered deliberately for now).
+
+    Leakage guard: candidates is filtered to exclude the pair's own compound
+    by inchikey (not string/SMILES equality), regardless of what the source
+    reaction_metadata_file row contains -- this makes leakage structurally
+    impossible here rather than relying on upstream data being clean.
+    """
+    reaction_df = pd.read_csv(reaction_metadata_file, sep="\t", dtype=str, keep_default_na=False)
+
+    reactions_by_inchikey = {}
+    for inchikey, group in reaction_df.groupby("inchikey"):
+        reactions_by_inchikey[inchikey] = group.to_dict("records")
+
+    out_pairs = []
+    for spec, mol in spectra_mol_pairs:
+        inchikey = mol.get_inchikey()
+        reactions = reactions_by_inchikey.get(inchikey, [])
+
+        if not reactions:
+            out_pairs.append((spec, mol))
+            continue
+
+        for reaction_row in reactions:
+            spec_copy = copy.copy(spec)
+            starting_materials = [
+                s for s in reaction_row.get("starting_materials", "").split(";") if s
+            ]
+            candidate_smis = [
+                s for s in reaction_row.get("candidates", "").split(";") if s
+            ]
+            # Leakage guard: never let the training target appear in its own
+            # candidate set, regardless of what the source data contains.
+            candidates = [
+                s
+                for s in candidate_smis
+                if Mol.MolFromSmiles(s) is None
+                or Mol.MolFromSmiles(s).get_inchikey() != inchikey
+            ]
+            spec_copy.aux_data = {
+                "starting_materials": starting_materials,
+                "candidates": candidates,
+            }
+            out_pairs.append((spec_copy, mol))
+
+    logging.info(
+        f"explode_with_reactions: {len(spectra_mol_pairs)} pairs -> "
+        f"{len(out_pairs)} pairs after reaction join"
+    )
+    return out_pairs
 
 
 class SpectraMolDataset(Dataset):
@@ -240,11 +292,11 @@ class SpectraMolDataset(Dataset):
         # batches, so this never affects anyone not using the feature.
         self.aux_dim = aux_dim
         self.aux_dropout = aux_dropout
-        self.aux_featurizer = (
-            aux_featurizers.AUX_REGISTRY["related_structures"](fp_names=fp_names)
-            if aux_dim > 0
-            else None
-        )
+        self.aux_sources = list(aux_featurizers.AUX_REGISTRY) if aux_dim > 0 else []
+        self.aux_featurizers = {
+            source: aux_featurizers.AUX_REGISTRY[source](fp_names=fp_names)
+            for source in self.aux_sources
+        }
 
     def upsample_forward(self):
         """add new forward entries"""
@@ -396,18 +448,19 @@ class SpectraMolDataset(Dataset):
             "matched": [True],
         }
 
-        if self.aux_featurizer is not None:
-            related_structures = spec.get_related_structures()
-            aux_present = len(related_structures) > 0
+        for source in self.aux_sources:
+            featurizer = self.aux_featurizers[source]
+            items = spec.get_aux_data(source)
+            aux_present = len(items) > 0
             if aux_present and self.train_mode and np.random.random() < self.aux_dropout:
                 aux_present = False
             aux_vec = (
-                self.aux_featurizer.featurize(related_structures)
+                featurizer.featurize(items)
                 if aux_present
-                else np.zeros(self.aux_featurizer.dim, dtype=np.float32)
+                else np.zeros(featurizer.dim, dtype=np.float32)
             )
-            out["aux_vec"] = [aux_vec]
-            out["aux_mask"] = [len(related_structures) > 0]
+            out[f"aux_vec_{source}"] = [aux_vec]
+            out[f"aux_mask_{source}"] = [len(items) > 0]
 
         return out
 
@@ -707,15 +760,20 @@ def _collate_pairs(
     base_dict.update(mol_dict)
 
     # Aux molecular conditioning (see mist.data.aux_featurizers), one vector
-    # per dataset item -- absent entirely when aux featurization is off, so
-    # this is a strict no-op for anyone not using the feature.
-    if "aux_vec" in input_batch[0]:
-        base_dict["aux_vec"] = torch.tensor(
-            np.array([j for jj in input_batch for j in jj["aux_vec"]]),
+    # per dataset item per configured source -- absent entirely when aux
+    # featurization is off, so this is a strict no-op for anyone not using
+    # the feature. Each source's key is independent (aux_vec_<source>) since
+    # sources are independently dropped out and projected.
+    aux_vec_keys = [k for k in input_batch[0] if k.startswith("aux_vec_")]
+    for vec_key in aux_vec_keys:
+        source = vec_key[len("aux_vec_") :]
+        mask_key = f"aux_mask_{source}"
+        base_dict[vec_key] = torch.tensor(
+            np.array([j for jj in input_batch for j in jj[vec_key]]),
             dtype=torch.float32,
         )
-        base_dict["aux_mask"] = torch.tensor(
-            [j for jj in input_batch for j in jj["aux_mask"]]
+        base_dict[mask_key] = torch.tensor(
+            [j for jj in input_batch for j in jj[mask_key]]
         )
 
     return base_dict

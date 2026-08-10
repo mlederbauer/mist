@@ -48,6 +48,12 @@ def run_training():
     spectra_mol_pairs = datasets.get_paired_spectra(**kwargs)
     spectra_mol_pairs = list(zip(*spectra_mol_pairs))
 
+    reaction_metadata_file = kwargs.get("reaction_metadata_file")
+    if reaction_metadata_file is not None:
+        spectra_mol_pairs = datasets.explode_with_reactions(
+            spectra_mol_pairs, reaction_metadata_file
+        )
+
     # Redefine splitter s.t. this splits three times and remove subsetting
     split_name, (train, val, test) = my_splitter.get_splits(spectra_mol_pairs)
 
@@ -75,10 +81,19 @@ def run_training():
 
     logging.info(f"Starting fold: {split_name}")
 
+    # wandb run name: the save-dir's parent folder name (e.g. "results/
+    # nist23_fp_mist_aux16/split_1" -> "nist23_fp_mist_aux16"), since that's
+    # what actually distinguishes one run's config from another's -- unlike
+    # split_name, which is the same ("split_1") across every run on the same
+    # split file and previously left every wandb run indistinguishably named.
+    save_dir = Path(kwargs["save_dir"])
+    wandb_run_name = save_dir.parent.name or save_dir.name
+
     test_loss = model.train_model(
         spec_dataloader_module,
         log_name="",
         log_version=split_name,
+        wandb_run_name=wandb_run_name,
         **kwargs,
     )
 
