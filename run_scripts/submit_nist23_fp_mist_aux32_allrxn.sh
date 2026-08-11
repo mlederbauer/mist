@@ -1,5 +1,5 @@
 #!/bin/bash
-#SBATCH --job-name=nist23_fp_mist_aux32
+#SBATCH --job-name=nist23_fp_mist_aux32_allrxn
 #SBATCH --output=logs/%x_%j.out
 #SBATCH --error=logs/%x_%j.err
 #SBATCH --partition=mit_preemptable,mit_normal_gpu,pi_ccoley
@@ -74,9 +74,13 @@ pixi run python src/mist/train_mist.py \
     --no-diffs \
     --aux-dim 32 \
     --aux-dropout 0.2 \
-    --reaction-metadata-file /home/magled/mist/data/nist23/reaction_metadata_uspto.tsv \
+    --checkpoint-every-n-train-steps 500 \
+    --reaction-metadata-file \
+        /home/magled/mist/data/nist23/reaction_metadata_uspto.tsv \
+        /home/magled/mist/data/nist23/reaction_metadata_cas.tsv \
+        /home/magled/mist/data/nist23/reaction_metadata_pistachio.tsv \
     --wandb-project mist-nist23 \
-    --save-dir results/nist23_fp_mist_aux32/split_1 &
+    --save-dir results/nist23_fp_mist_aux32_allrxn/split_1 &
 
 CHILD_PID=$!
 wait $CHILD_PID

@@ -74,7 +74,7 @@ pixi run python src/mist/train_mist.py \
     --no-diffs \
     --aux-dim 64 \
     --aux-dropout 0.2 \
-    --reaction-metadata-file /home/magled/mist/data/nist23/reaction_metadata.tsv \
+    --reaction-metadata-file /home/magled/mist/data/nist23/reaction_metadata_uspto.tsv \
     --wandb-project mist-nist23 \
     --save-dir results/nist23_fp_mist_aux64/split_1 &
 
