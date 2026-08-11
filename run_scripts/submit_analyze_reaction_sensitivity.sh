@@ -10,7 +10,7 @@
 #SBATCH --time=04:00:00
 
 cd /home/magled/mist
-source "$(dirname "$0")/mail_notify.sh"
+source "run_scripts/mail_notify.sh"
 export PATH="$HOME/.pixi/bin:$PATH"
 export TORCH_CPP_LOG_LEVEL="ERROR"
 

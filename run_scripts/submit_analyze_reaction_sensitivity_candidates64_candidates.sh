@@ -11,7 +11,7 @@
 # mail-type/mail-user removed: mail_notify.sh below emails log tails instead
 
 cd /home/magled/mist
-source "$(dirname "$0")/mail_notify.sh"
+source "run_scripts/mail_notify.sh"
 export PATH="$HOME/.pixi/bin:$PATH"
 export TORCH_CPP_LOG_LEVEL="ERROR"
 

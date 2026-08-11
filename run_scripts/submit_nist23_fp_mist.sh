@@ -12,7 +12,7 @@
 #SBATCH --signal=B:USR1@120
 
 cd /home/magled/mist
-source "$(dirname "$0")/mail_notify.sh"
+source "run_scripts/mail_notify.sh"
 export PATH="$HOME/.pixi/bin:$PATH"
 export TORCH_CPP_LOG_LEVEL="ERROR"
 
@@ -45,11 +45,19 @@ trap handle_preemption SIGUSR1
 
 DATA=/orcd/data/ccoley/001/msms_data/nist23
 
+# --subform-folder points at the repaired, paper-faithful subformula
+# assignments (data/nist23/subformulae/subform_50_repaired/, built by
+# run_scripts/submit_build_nist23_subform_repaired.sh) instead of
+# magma_subform_50.hdf5 -- see NIST23_TRAINING_CHANGELOG.md bug #2. The old
+# hdf5 assigned formulae per collision-energy block independently, then
+# concatenated them with no dedup; the repaired directory merges collision
+# blocks (dedup by rounded m/z, keep max intensity) BEFORE assigning
+# formulae once per spectrum, matching canopus_train/csi2022.
 pixi run python src/mist/train_mist.py \
     --cache-featurizers \
     --labels-file "$DATA/labels.tsv" \
     --spec-folder "$DATA/spec_files.hdf5" \
-    --subform-folder "$DATA/subformulae/magma_subform_50.hdf5" \
+    --subform-folder data/nist23/subformulae/subform_50_repaired \
     --split-file "$DATA/splits/split_1.tsv" \
     --embed-instrument \
     --fp-names morgan4096 \
@@ -74,7 +82,7 @@ pixi run python src/mist/train_mist.py \
     --form-embedder 'pos-cos' \
     --no-diffs \
     --wandb-project mist-nist23 \
-    --save-dir results/nist23_fp_mist/split_1 &
+    --save-dir results/nist23_fp_mist/split_1_repaired &
 
 CHILD_PID=$!
 wait $CHILD_PID

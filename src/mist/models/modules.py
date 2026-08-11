@@ -52,6 +52,7 @@ class FormulaTransformer(nn.Module):
         output_size=2048,
         form_embedder: str = "float",
         embed_instrument: bool = False,
+        embed_adduct: bool = False,
         inten_transform: str = "float",
         no_diffs: bool = False,
         **kwargs
@@ -93,6 +94,16 @@ class FormulaTransformer(nn.Module):
         self.instr_dim = utils.max_instr_idx
         self.instrument_embedder = nn.Parameter(torch.eye(self.instr_dim))
 
+        # Spectrum-level (root/precursor) adduct embedding -- distinct from
+        # the per-peak adduct one-hot (adduct_dim/one_hot_adducts below),
+        # which is always on and derived per-fragment from formula
+        # assignment. This one is a single, position-invariant signal for
+        # the whole spectrum's adduct, broadcast to every peak, same
+        # mechanism as embed_instrument above.
+        self.embed_adduct = embed_adduct
+        self.root_ion_dim = featurizers.PeakFormula.num_adducts + 1
+        self.adduct_embedder = nn.Parameter(torch.eye(self.root_ion_dim))
+
         self.inten_transform = inten_transform
         self.inten_feats = featurizers.PeakFormula.get_num_inten_feats(
             self.inten_transform
@@ -112,6 +123,7 @@ class FormulaTransformer(nn.Module):
             + self.instr_dim
             + self.inten_feats
             + self.adduct_dim
+            + self.root_ion_dim
         )
 
         self.intermediate_layer = MLPBlocks(
@@ -146,6 +158,7 @@ class FormulaTransformer(nn.Module):
         num_peaks = batch["num_peaks"]
         peak_types = batch["types"]
         instruments = batch["instruments"]
+        root_ions = batch["root_ions"]
 
         device = num_peaks.device
         batch_dim = num_peaks.shape[0]
@@ -188,6 +201,14 @@ class FormulaTransformer(nn.Module):
                 device
             )
 
+        embedded_adducts = self.adduct_embedder[root_ions.long()]
+        if self.embed_adduct:
+            embedded_adducts = embedded_adducts[:, None, :].repeat(1, peak_dim, 1)
+        else:
+            embedded_adducts = torch.zeros(batch_dim, peak_dim, self.root_ion_dim).to(
+                device
+            )
+
         input_vec = [
             form_vec,
             diff_vec,
@@ -195,6 +216,7 @@ class FormulaTransformer(nn.Module):
             one_hot_adducts,
             inten_tensor,
             embedded_instruments,
+            embedded_adducts,
         ]
         input_vec = torch.cat(input_vec, dim=-1)
         peak_tensor = self.intermediate_layer(input_vec)

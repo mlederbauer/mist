@@ -1,5 +1,5 @@
 #!/bin/bash
-#SBATCH --job-name=analyze_reaction_sensitivity_aux64_candidates
+#SBATCH --job-name=analyze_candidate_discrimination_aux64
 #SBATCH --output=logs/%x_%j.out
 #SBATCH --error=logs/%x_%j.err
 #SBATCH --partition=mit_preemptable,mit_normal_gpu,pi_ccoley
@@ -30,7 +30,7 @@ nvidia-smi -L
 
 DATA=/orcd/data/ccoley/001/msms_data/nist23
 
-pixi run python -m mist.analyze_reaction_sensitivity \
+pixi run python -m mist.analyze_candidate_discrimination \
     --model-ckpt results/nist23_fp_mist_aux64/split_1/split_1/last.ckpt \
     --labels-file "$DATA/labels.tsv" \
     --spec-folder "$DATA/spec_files.hdf5" \
@@ -38,7 +38,6 @@ pixi run python -m mist.analyze_reaction_sensitivity \
     --split-file "$DATA/splits/split_1.tsv" \
     --reaction-metadata-file \
         /home/magled/mist/data/nist23/reaction_metadata_uspto.tsv \
-    --aux-source candidates \
     --subset-datasets test_only \
     --num-workers 16 \
     --gpu \

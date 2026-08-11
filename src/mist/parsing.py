@@ -470,6 +470,19 @@ def add_mist_args(parser):
         action="store_true",
         help="If true, embed the instrument",
     )
+    ma.add_argument(
+        "--embed-adduct",
+        default=False,
+        action="store_true",
+        help=(
+            "If true, embed the spectrum's precursor adduct (root_ion) as a "
+            "one-hot vector broadcast to every peak -- same mechanism as "
+            "--embed-instrument. Distinct from the per-peak adduct one-hot "
+            "already always concatenated into peak inputs (ion_vec, derived "
+            "per-fragment from formula assignment): this adds a stable, "
+            "position-invariant whole-spectrum adduct signal on top."
+        ),
+    )
 
     ma.add_argument(
         "--cls-type",

@@ -1,13 +1,13 @@
 #!/bin/bash
-#SBATCH --job-name=nist23_fp_mist_candidates64
+#SBATCH --job-name=nist23_fp_mist_embed_adduct
 #SBATCH --output=logs/%x_%j.out
 #SBATCH --error=logs/%x_%j.err
-#SBATCH --partition=pi_ccoley
+#SBATCH --partition=mit_preemptable,mit_normal_gpu,pi_ccoley
 #SBATCH --nodes=1
 #SBATCH --cpus-per-task=16
 #SBATCH --gres=gpu:h100:1
 #SBATCH --mem=256G
-#SBATCH --time=48:00:00
+#SBATCH --time=24:00:00
 #SBATCH --requeue
 #SBATCH --signal=B:USR1@120
 
@@ -43,13 +43,23 @@ trap handle_preemption SIGUSR1
 
 DATA=/orcd/data/ccoley/001/msms_data/nist23
 
+# Same as submit_nist23_fp_mist.sh (repaired subformula data, full adduct
+# mix), plus --embed-adduct: a spectrum-level, position-invariant one-hot
+# embedding of the precursor adduct (root_ion), broadcast to every peak --
+# same mechanism as --embed-instrument. Distinct from the per-peak adduct
+# one-hot already always active (ion_vec, derived per-fragment from formula
+# assignment); this adds a stable whole-spectrum adduct signal on top.
+# Compare against submit_nist23_fp_mist.sh (no adduct embedding) and
+# submit_nist23_fp_mist_mhplus_only.sh ([M+H]+-only, paper-faithful subset)
+# to see whether explicit adduct conditioning helps on NIST23's 13-adduct mix.
 pixi run python src/mist/train_mist.py \
     --cache-featurizers \
     --labels-file "$DATA/labels.tsv" \
     --spec-folder "$DATA/spec_files.hdf5" \
-    --subform-folder "$DATA/subformulae/magma_subform_50.hdf5" \
+    --subform-folder data/nist23/subformulae/subform_50_repaired \
     --split-file "$DATA/splits/split_1.tsv" \
     --embed-instrument \
+    --embed-adduct \
     --fp-names morgan4096 \
     --num-workers 16 \
     --seed 1 \
@@ -71,12 +81,8 @@ pixi run python src/mist/train_mist.py \
     --magma-modulo 512 \
     --form-embedder 'pos-cos' \
     --no-diffs \
-    --aux-dim 64 \
-    --aux-dropout 0.2 \
-    --checkpoint-every-n-train-steps 500 \
-    --reaction-metadata-file /home/magled/mist/data/nist23/reaction_metadata_uspto.tsv \
     --wandb-project mist-nist23 \
-    --save-dir results/nist23_fp_mist_candidates64/split_1 &
+    --save-dir results/nist23_fp_mist_embed_adduct/split_1 &
 
 CHILD_PID=$!
 wait $CHILD_PID
