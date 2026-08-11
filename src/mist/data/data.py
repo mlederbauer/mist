@@ -3,6 +3,7 @@ import logging
 from typing import List, Optional
 import re
 
+import numpy as np
 from rdkit import Chem
 from rdkit.Chem import Descriptors
 from mist import utils
@@ -39,13 +40,21 @@ class Spectra(object):
         self.spectra_hdf5 = spectra_hdf5
         self.spectra_hdf5_key = spectra_hdf5_key
 
-        # Auxiliary molecular conditioning data (see mist.data.aux_featurizers),
-        # e.g. {"starting_materials": [...], "candidates": [...]}. Not a
-        # constructor arg -- this is a post-hoc annotation attached by
-        # datasets.explode_with_reactions after Spectra objects already exist
-        # (a reaction match is a property of a (spectrum, reaction) pair, not
+        # Auxiliary molecular conditioning data (see mist.data.aux_featurizers).
+        # Not a constructor arg -- this is a post-hoc annotation attached by
+        # datasets.attach_reactions after Spectra objects already exist (a
+        # reaction match is a property of a (spectrum, reaction) pair, not
         # something knowable from labels.tsv alone). Empty by default, so any
         # Spectra not touched by that step behaves exactly as before.
+        #
+        # Shape: {source: [reaction_record, ...]}, e.g.
+        # {"starting_materials": [{"reaction_id": "...", "smiles": [...]}, ...]}
+        # -- a compound can match multiple reactions, so this holds ALL of
+        # them (capped, see attach_reactions); which one is used for a given
+        # forward pass is a __getitem__-time choice (random for training,
+        # explicit reaction_id or "none" for eval/inference), not baked in
+        # here. This makes reaction/compound steering at inference time
+        # possible: callers pick a reaction_id via get_aux_data(..., reaction_id=...).
         self.aux_data = {}
 
         ##
@@ -59,8 +68,37 @@ class Spectra(object):
     def get_instrument(self):
         return self.instrument
 
-    def get_aux_data(self, source: str) -> list:
+    def get_aux_records(self, source: str) -> list:
+        """All matched reaction records for `source` (e.g. all reactions this
+        compound is a product of), unfiltered. Use get_aux_data to pick one."""
         return self.aux_data.get(source, [])
+
+    def get_aux_data(
+        self, source: str, reaction_id: Optional[str] = None, rng=None
+    ) -> list:
+        """SMILES list for one matched reaction of `source`.
+
+        - reaction_id given: return that specific reaction's SMILES (steering
+          a prediction toward a known/chosen reaction), or [] if this
+          compound has no match with that id.
+        - reaction_id=None: pick uniformly at random among matched reactions
+          (rng, if given, else the global numpy RNG) -- the training-time
+          default, so repeated epochs see different reactions for compounds
+          with more than one match instead of a fixed pick.
+        - No matches at all: [] (falls back to the zero vector), same as a
+          compound that was never joined to any reaction.
+        """
+        records = self.get_aux_records(source)
+        if not records:
+            return []
+        if reaction_id is not None:
+            for record in records:
+                if record.get("reaction_id") == reaction_id:
+                    return record.get("smiles", [])
+            return []
+        randint = rng.integers if rng is not None else np.random.randint
+        record = records[randint(len(records))]
+        return record.get("smiles", [])
 
     def _load_spectra(self):
         """Load the spectra from files"""

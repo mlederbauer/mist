@@ -61,14 +61,20 @@ def score_function(config, base_args, trial_dir, trial_number=0):
     spectra_mol_pairs = datasets.get_paired_spectra(**kwargs)
     spectra_mol_pairs = list(zip(*spectra_mol_pairs))
 
-    reaction_metadata_file = kwargs.get("reaction_metadata_file")
-    if reaction_metadata_file is not None:
-        spectra_mol_pairs = datasets.explode_with_reactions(
-            spectra_mol_pairs, reaction_metadata_file
-        )
-
     # Redefine splitter s.t. this splits three times and remove subsetting
     split_name, (train, val, _test) = my_splitter.get_splits(spectra_mol_pairs)
+
+    # Reaction join happens AFTER splitting and ONLY on train -- see
+    # train_mist.py for why (val/test comparability + leakage avoidance).
+    reaction_metadata_file = kwargs.get("reaction_metadata_file")
+    if reaction_metadata_file is not None:
+        max_reactions = kwargs.get("max_reactions_per_compound") or None
+        train = datasets.attach_reactions(
+            train,
+            reaction_metadata_file,
+            max_reactions_per_compound=max_reactions,
+            seed=kwargs.get("seed"),
+        )
 
     rng = np.random.default_rng(kwargs.get("seed"))
 

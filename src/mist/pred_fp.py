@@ -53,8 +53,37 @@ def get_args():
         choices=[
             "none",
             "test_only",
+            "val_only",
+            "train_only",
         ],
         help="Settings for how to subset the dataset",
+    )
+    parser.add_argument(
+        "--reaction-metadata-file",
+        default=None,
+        nargs="+",
+        action="store",
+        help=(
+            "One or more reaction_metadata_<source>.tsv paths to join by "
+            "inchikey, for steering predictions with a specific compound's "
+            "reaction context at inference time (requires the checkpoint was "
+            "trained with --aux-dim > 0). By itself this only makes reaction "
+            "data available -- without --reaction-id-file, predictions still "
+            "default to no reaction (zero vector) for every spectrum, "
+            "matching eval behavior during training."
+        ),
+    )
+    parser.add_argument(
+        "--reaction-id-file",
+        default=None,
+        action="store",
+        help=(
+            "TSV with columns spec_name, reaction_id: pins each named "
+            "spectrum's prediction to that specific matched reaction's "
+            "starting_materials/candidates (from --reaction-metadata-file) "
+            "instead of the default no-reaction zero vector. Spectra not "
+            "listed here fall back to no reaction."
+        ),
     )
     return parser.parse_args()
 
@@ -119,16 +148,39 @@ def run_fp_pred():
     subset_datasets = kwargs.get("subset_datasets")
     if subset_datasets == "none":
         pass
-    elif subset_datasets == "test_only":
+    elif subset_datasets in ("test_only", "val_only", "train_only"):
+        fold_name = subset_datasets.removesuffix("_only")
         split_name = Path(kwargs["split_file"])
         split_df = pd.read_csv(split_name, sep="\t")
-        logging.info(f"Subset to test of split {split_name.stem}")
-        valid_names = set(split_df["name"][split_df["split"] == "test"].values)
+        logging.info(f"Subset to {fold_name} of split {split_name.stem}")
+        # Some split files (e.g. NIST) use "spec"/"Fold_0" instead of this
+        # repo's usual "name"/"split" column names; accept either.
+        name_col = "name" if "name" in split_df.columns else split_df.columns[0]
+        split_col = "split" if "split" in split_df.columns else split_df.columns[1]
+        valid_names = set(split_df[name_col][split_df[split_col] == fold_name].values)
         spectra_mol_pairs = [
             (i, j) for i, j in spectra_mol_pairs if i.get_spec_name() in valid_names
         ]
     else:
         pass
+
+    # Reaction/compound steering: attach matched reactions so a specific one
+    # can be selected per spectrum via --reaction-id-file (see
+    # SpectraMolDataset.__getitem__ -- eval/inference never picks randomly).
+    reaction_metadata_file = kwargs.get("reaction_metadata_file")
+    if reaction_metadata_file is not None:
+        spectra_mol_pairs = datasets.attach_reactions(
+            spectra_mol_pairs,
+            reaction_metadata_file,
+            max_reactions_per_compound=kwargs.get("max_reactions_per_compound") or None,
+        )
+
+    reaction_id_file = kwargs.get("reaction_id_file")
+    if reaction_id_file is not None:
+        steer_df = pd.read_csv(reaction_id_file, sep="\t", dtype=str)
+        kwargs["aux_reaction_id_by_spec"] = dict(
+            zip(steer_df["spec_name"], steer_df["reaction_id"])
+        )
 
     # Create dataset
     test_dataset = datasets.SpectraMolDataset(

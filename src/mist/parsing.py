@@ -134,14 +134,35 @@ def add_dataset_args(parser):
     da.add_argument(
         "--reaction-metadata-file",
         default=None,
+        nargs="+",
         action="store",
         help=(
-            "Path to a reaction_metadata.tsv (see mist.build_reaction_metadata) "
-            "to join by inchikey and explode into one dataset item per "
-            "(spectrum, matched reaction) pair, for auxiliary molecular "
-            "conditioning (--aux-dim). Compounds with no matched reaction pass "
-            "through unchanged. Off by default -- no reaction join happens "
-            "unless this is set."
+            "One or more reaction_metadata_<source>.tsv paths (see "
+            "mist.build_reaction_metadata), e.g. --reaction-metadata-file "
+            "data/nist23/reaction_metadata_uspto.tsv "
+            "data/nist23/reaction_metadata_cas.tsv -- concatenated and joined "
+            "by inchikey, attaching all matched reactions (up to "
+            "--max-reactions-per-compound) to each training-set spectrum for "
+            "auxiliary molecular conditioning (--aux-dim); one is picked at "
+            "random per training step. Applied to the TRAIN split only -- "
+            "val/test always evaluate with no reaction (zero vector), for "
+            "comparability with the no-aux baseline. Compounds with no "
+            "matched reaction pass through unchanged. Off by default -- no "
+            "reaction join happens unless this is set."
+        ),
+    )
+    da.add_argument(
+        "--max-reactions-per-compound",
+        default=10,
+        type=int,
+        action="store",
+        help=(
+            "Cap on how many matched reactions to keep per training compound "
+            "when --reaction-metadata-file is set (randomly subsampled if a "
+            "compound matches more than this). Bounds how much a few "
+            "promiscuous compounds (e.g. common salt-forming counter-ions "
+            "matching thousands of incidental reactions) can dominate "
+            "training. Set to a large number or 0 for no cap."
         ),
     )
     return da
