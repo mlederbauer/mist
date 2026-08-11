@@ -5,7 +5,7 @@ import pickle
 import h5py
 import logging
 from functools import partial
-from typing import Optional, List, Tuple, Set, Callable
+from typing import Optional, List, Tuple, Set, Callable, Union
 import numpy as np
 import pandas as pd
 
@@ -156,46 +156,70 @@ def get_paired_spectra(
     return (spectra_list, mol_list)
 
 
-def explode_with_reactions(
+def attach_reactions(
     spectra_mol_pairs: List[Tuple[Spectra, Mol]],
-    reaction_metadata_file: str,
+    reaction_metadata_files: Union[str, List[str]],
+    max_reactions_per_compound: Optional[int] = 10,
+    seed: Optional[int] = None,
 ) -> List[Tuple[Spectra, Mol]]:
-    """Join spectra_mol_pairs to reaction_metadata_file by inchikey and
-    explode: one output pair per (original pair, matched reaction row), each
-    carrying that reaction's starting_materials/candidates as aux data (see
-    mist.data.aux_featurizers, Spectra.aux_data).
+    """Join spectra_mol_pairs to one or more reaction_metadata_<source>.tsv
+    files (concatenated) by inchikey and attach ALL matched reactions (up to
+    max_reactions_per_compound) to each Spectra's aux_data (see
+    mist.data.aux_featurizers, Spectra.get_aux_data/get_aux_records) --
+    no row duplication. Which reaction (if any) is used for a given forward
+    pass is decided later, at __getitem__ time: randomly per-epoch during
+    training, or by explicit reaction_id for steered eval/inference.
 
-    A compound with zero matched reactions passes through as a single
-    unchanged pair (no aux data attached -- exactly as if this function were
-    never called for that pair), so nothing is dropped from training for lack
-    of reaction data. A compound with N matched reactions produces N output
-    pairs, each a distinct (shallow) copy of the original Spectra with its
-    own aux_data -- no cap on N (see CLAUDE.md: some compounds, e.g. common
-    salt-forming counter-ions, match thousands of incidental reactions; left
-    unfiltered deliberately for now).
+    A compound with zero matched reactions passes through unchanged (no aux
+    data attached), so nothing is dropped from training for lack of reaction
+    data. A compound with N matched reactions keeps min(N,
+    max_reactions_per_compound) of them, chosen deterministically (seeded) to
+    bound the influence of a few promiscuous compounds (e.g. common
+    salt-forming counter-ions matching thousands of incidental reactions)
+    without dropping reaction diversity from every other compound. Pass
+    max_reactions_per_compound=None for no cap.
 
     Leakage guard: candidates is filtered to exclude the pair's own compound
     by inchikey (not string/SMILES equality), regardless of what the source
     reaction_metadata_file row contains -- this makes leakage structurally
     impossible here rather than relying on upstream data being clean.
     """
-    reaction_df = pd.read_csv(reaction_metadata_file, sep="\t", dtype=str, keep_default_na=False)
+    if isinstance(reaction_metadata_files, str):
+        reaction_metadata_files = [reaction_metadata_files]
+    reaction_df = pd.concat(
+        [
+            pd.read_csv(f, sep="\t", dtype=str, keep_default_na=False)
+            for f in reaction_metadata_files
+        ],
+        ignore_index=True,
+    )
 
     reactions_by_inchikey = {}
     for inchikey, group in reaction_df.groupby("inchikey"):
         reactions_by_inchikey[inchikey] = group.to_dict("records")
 
-    out_pairs = []
+    rng = np.random.default_rng(seed)
+    n_attached = 0
+    n_capped = 0
     for spec, mol in spectra_mol_pairs:
         inchikey = mol.get_inchikey()
-        reactions = reactions_by_inchikey.get(inchikey, [])
-
-        if not reactions:
-            out_pairs.append((spec, mol))
+        reaction_rows = reactions_by_inchikey.get(inchikey, [])
+        if not reaction_rows:
             continue
 
-        for reaction_row in reactions:
-            spec_copy = copy.copy(spec)
+        if max_reactions_per_compound is not None and len(
+            reaction_rows
+        ) > max_reactions_per_compound:
+            keep_inds = rng.choice(
+                len(reaction_rows), size=max_reactions_per_compound, replace=False
+            )
+            reaction_rows = [reaction_rows[i] for i in keep_inds]
+            n_capped += 1
+
+        starting_material_records = []
+        candidate_records = []
+        for reaction_row in reaction_rows:
+            reaction_id = reaction_row.get("reaction_id")
             starting_materials = [
                 s for s in reaction_row.get("starting_materials", "").split(";") if s
             ]
@@ -210,17 +234,22 @@ def explode_with_reactions(
                 if Mol.MolFromSmiles(s) is None
                 or Mol.MolFromSmiles(s).get_inchikey() != inchikey
             ]
-            spec_copy.aux_data = {
-                "starting_materials": starting_materials,
-                "candidates": candidates,
-            }
-            out_pairs.append((spec_copy, mol))
+            starting_material_records.append(
+                {"reaction_id": reaction_id, "smiles": starting_materials}
+            )
+            candidate_records.append({"reaction_id": reaction_id, "smiles": candidates})
+
+        spec.aux_data = {
+            "starting_materials": starting_material_records,
+            "candidates": candidate_records,
+        }
+        n_attached += 1
 
     logging.info(
-        f"explode_with_reactions: {len(spectra_mol_pairs)} pairs -> "
-        f"{len(out_pairs)} pairs after reaction join"
+        f"attach_reactions: {n_attached}/{len(spectra_mol_pairs)} pairs matched "
+        f"a reaction ({n_capped} capped to {max_reactions_per_compound})"
     )
-    return out_pairs
+    return spectra_mol_pairs
 
 
 class SpectraMolDataset(Dataset):
@@ -280,6 +309,9 @@ class SpectraMolDataset(Dataset):
         forward_aug_folder=None,
         aux_dim: int = 0,
         aux_dropout: float = 0.2,
+        aux_reaction_id_by_spec: Optional[dict] = None,
+        aux_seed: Optional[int] = None,
+        aux_use_preset_data: bool = False,
         **kwargs,
     ):
         self.forward_labels = forward_labels
@@ -297,6 +329,23 @@ class SpectraMolDataset(Dataset):
             source: aux_featurizers.AUX_REGISTRY[source](fp_names=fp_names)
             for source in self.aux_sources
         }
+        # Compound/reaction steering at inference time: {spec_name:
+        # reaction_id} to pin a specific matched reaction per spectrum
+        # instead of the training-time random pick. Unset (None) means "no
+        # steering" -- eval/inference then use no reaction (zero vector) for
+        # every example, same as a compound with no matches, since there's no
+        # principled way to auto-pick "the best" reaction for an example that
+        # may match several. See mist.pred_fp --reaction-id-file.
+        self.aux_reaction_id_by_spec = aux_reaction_id_by_spec or {}
+        # For callers (e.g. analyze_reaction_sensitivity) that build one
+        # dataset ROW per (compound, single chosen reaction) themselves --
+        # each Spectra copy's aux_data already holds exactly the one record
+        # that row should use, keyed by object identity rather than name (so
+        # duplicated compounds with the same spec_name don't collide via
+        # aux_reaction_id_by_spec). Skips both the random-pick (train) and
+        # by-name-steering (eval) paths and just uses aux_data as-is.
+        self.aux_use_preset_data = aux_use_preset_data
+        self.aux_rng = np.random.default_rng(aux_seed)
 
     def upsample_forward(self):
         """add new forward entries"""
@@ -450,7 +499,28 @@ class SpectraMolDataset(Dataset):
 
         for source in self.aux_sources:
             featurizer = self.aux_featurizers[source]
-            items = spec.get_aux_data(source)
+            if self.aux_use_preset_data:
+                # Caller already set this exact row's aux_data -- use it
+                # as-is (a compound with 0 or 1 records here is the normal
+                # case; get_aux_records handles both).
+                records = spec.get_aux_records(source)
+                items = records[0].get("smiles", []) if records else []
+            elif self.train_mode:
+                # Random pick per call -- a compound with N>1 matched
+                # reactions sees a different one each epoch, turning
+                # multiplicity into stochastic augmentation instead of
+                # static duplicate rows.
+                items = spec.get_aux_data(source, rng=self.aux_rng)
+            else:
+                # Eval/inference: no implicit random pick. Default is "no
+                # reaction" (zero vector) unless the caller explicitly steers
+                # this spectrum toward one via aux_reaction_id_by_spec.
+                reaction_id = self.aux_reaction_id_by_spec.get(spec.get_spec_name())
+                items = (
+                    spec.get_aux_data(source, reaction_id=reaction_id)
+                    if reaction_id is not None
+                    else []
+                )
             aux_present = len(items) > 0
             if aux_present and self.train_mode and np.random.random() < self.aux_dropout:
                 aux_present = False

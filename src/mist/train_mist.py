@@ -48,14 +48,24 @@ def run_training():
     spectra_mol_pairs = datasets.get_paired_spectra(**kwargs)
     spectra_mol_pairs = list(zip(*spectra_mol_pairs))
 
-    reaction_metadata_file = kwargs.get("reaction_metadata_file")
-    if reaction_metadata_file is not None:
-        spectra_mol_pairs = datasets.explode_with_reactions(
-            spectra_mol_pairs, reaction_metadata_file
-        )
-
     # Redefine splitter s.t. this splits three times and remove subsetting
     split_name, (train, val, test) = my_splitter.get_splits(spectra_mol_pairs)
+
+    # Reaction join happens AFTER splitting and ONLY on train: val/test must
+    # stay one-item-per-compound (matching the no-aux baseline exactly) so
+    # their loss is comparable, and default to "no reaction" aux
+    # conditioning (see SpectraMolDataset.__getitem__) rather than an
+    # arbitrary pick among a compound's matches. Joining pre-split would also
+    # let a compound's matched reactions leak across the split boundary.
+    reaction_metadata_file = kwargs.get("reaction_metadata_file")
+    if reaction_metadata_file is not None:
+        max_reactions = kwargs.get("max_reactions_per_compound") or None
+        train = datasets.attach_reactions(
+            train,
+            reaction_metadata_file,
+            max_reactions_per_compound=max_reactions,
+            seed=kwargs.get("seed"),
+        )
 
     for name, _data in zip(["train", "val", "test"], [train, val, test]):
         logging.info(f"Len of {name}: {len(_data)}")
