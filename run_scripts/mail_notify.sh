@@ -10,11 +10,11 @@ notify() {
         echo "To: ${MAIL_NOTIFY_USER:-magled@mit.edu}"
         echo "Subject: Slurm job ${SLURM_JOB_NAME} (${SLURM_JOB_ID}) $status"
         echo
-        echo "=== tail -n 200 $err ==="
-        tail -n 200 "$err" 2>/dev/null
+        echo "=== tail -n 20 $err ==="
+        tail -n 20 "$err" 2>/dev/null
         echo
-        echo "=== tail -n 200 $out ==="
-        tail -n 200 "$out" 2>/dev/null
+        echo "=== tail -n 20 $out ==="
+        tail -n 20 "$out" 2>/dev/null
     } | sendmail -t
 }
 trap 'notify "exit code $?"' EXIT
