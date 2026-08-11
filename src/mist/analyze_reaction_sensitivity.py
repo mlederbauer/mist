@@ -51,6 +51,19 @@ def get_args():
     )
     parser.add_argument("--max-reactions-per-compound", type=int, default=10)
     parser.add_argument(
+        "--aux-source",
+        default="starting_materials",
+        choices=["starting_materials", "candidates"],
+        help=(
+            "Which aux source to steer with -- starting_materials (reaction "
+            "context) or candidates (only populated for a subset of USPTO "
+            "rows; a checkpoint trained without candidates data present will "
+            "have an untrained-but-live aux_projections['candidates'] "
+            "pathway, so this tests what an unlearned projection produces vs. "
+            "one that saw real candidates during training)."
+        ),
+    )
+    parser.add_argument(
         "--subset-datasets",
         default="test_only",
         choices=["none", "test_only", "val_only", "train_only"],
@@ -122,12 +135,15 @@ def run_analysis():
         max_reactions_per_compound=kwargs.get("max_reactions_per_compound") or None,
     )
 
-    # Keep only compounds with >=2 matched reactions -- a single-reaction
-    # compound has nothing to compare sensitivity across.
+    aux_source = kwargs["aux_source"]
+
+    # Keep only compounds with >=2 matched reactions that ALSO have non-empty
+    # data for this source -- candidates is only populated for a subset of
+    # USPTO rows, so a reaction match doesn't guarantee usable candidates.
     multi_reaction_pairs = [
         (spec, mol)
         for spec, mol in spectra_mol_pairs
-        if len(spec.get_aux_records("starting_materials")) >= 2
+        if sum(1 for r in spec.get_aux_records(aux_source) if r.get("smiles")) >= 2
     ]
     logging.info(
         f"{len(multi_reaction_pairs)}/{len(spectra_mol_pairs)} pairs have "
@@ -161,10 +177,13 @@ def run_analysis():
         expanded_pairs.append((none_copy, mol))
         row_meta.append((spec_name, "none"))
 
-        for record in spec.get_aux_records("starting_materials"):
+        for record in spec.get_aux_records(aux_source):
+            if not record.get("smiles"):
+                continue
             rid = record["reaction_id"]
             reaction_copy = _copy.copy(spec)
-            reaction_copy.aux_data = {"starting_materials": [record], "candidates": []}
+            reaction_copy.aux_data = {"starting_materials": [], "candidates": []}
+            reaction_copy.aux_data[aux_source] = [record]
             expanded_pairs.append((reaction_copy, mol))
             row_meta.append((spec_name, rid))
 

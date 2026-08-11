@@ -1,5 +1,5 @@
 #!/bin/bash
-#SBATCH --job-name=analyze_reaction_sensitivity
+#SBATCH --job-name=analyze_reaction_sensitivity_aux64_candidates
 #SBATCH --output=logs/%x_%j.out
 #SBATCH --error=logs/%x_%j.err
 #SBATCH --partition=mit_preemptable,mit_normal_gpu,pi_ccoley
@@ -8,6 +8,7 @@
 #SBATCH --gres=gpu:h100:1
 #SBATCH --mem=128G
 #SBATCH --time=04:00:00
+# mail-type/mail-user removed: mail_notify.sh below emails log tails instead
 
 cd /home/magled/mist
 source "$(dirname "$0")/mail_notify.sh"
@@ -30,16 +31,15 @@ nvidia-smi -L
 DATA=/orcd/data/ccoley/001/msms_data/nist23
 
 pixi run python -m mist.analyze_reaction_sensitivity \
-    --model-ckpt results/nist23_fp_mist_aux32_allrxn/split_1/split_1/last.ckpt \
+    --model-ckpt results/nist23_fp_mist_aux64/split_1/split_1/last.ckpt \
     --labels-file "$DATA/labels.tsv" \
     --spec-folder "$DATA/spec_files.hdf5" \
     --subform-folder "$DATA/subformulae/magma_subform_50.hdf5" \
     --split-file "$DATA/splits/split_1.tsv" \
     --reaction-metadata-file \
         /home/magled/mist/data/nist23/reaction_metadata_uspto.tsv \
-        /home/magled/mist/data/nist23/reaction_metadata_cas.tsv \
-        /home/magled/mist/data/nist23/reaction_metadata_pistachio.tsv \
+    --aux-source candidates \
     --subset-datasets test_only \
     --num-workers 16 \
     --gpu \
-    --save-dir results/nist23_fp_mist_aux32_allrxn/split_1/split_1/preds
+    --save-dir results/nist23_fp_mist_aux64/split_1/split_1/preds_candidates
