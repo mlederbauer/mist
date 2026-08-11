@@ -184,7 +184,7 @@ class FingerprintFeaturizer(MolFeaturizer):
 
     @staticmethod
     def collate_fn(mols: List[dict]) -> dict:
-        fp_ar = torch.tensor(mols)
+        fp_ar = torch.from_numpy(np.array(mols))
         return {"mols": fp_ar}
 
     def featurize_smiles(self, smiles: str, **kwargs) -> np.ndarray:

@@ -12,6 +12,7 @@ from typing import List, Optional, Tuple
 
 import numpy as np
 import torch
+from tqdm import tqdm
 import pytorch_lightning as pl
 from pytorch_lightning import loggers as pl_loggers
 from pytorch_lightning.callbacks.early_stopping import EarlyStopping
@@ -155,7 +156,7 @@ class TorchModel(pl.LightningModule, ABC):
                 spectras, shuffle=False, **kwargs
             )
             spectra_outputs = []
-            for spectra_batch in spectra_loader:
+            for spectra_batch in tqdm(spectra_loader, desc="Encoding spectra"):
                 self.batch_to_device(spectra_batch)
 
                 # Convert to cpu!
@@ -184,7 +185,7 @@ class TorchModel(pl.LightningModule, ABC):
                 mol_library, shuffle=False, **kwargs
             )
             mol_outputs = []
-            for mol_batch in mol_loader:
+            for mol_batch in tqdm(mol_loader, desc="Encoding mols"):
                 self.batch_to_device(mol_batch)
 
                 # Convert to cpu!
