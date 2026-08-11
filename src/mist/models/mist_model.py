@@ -290,6 +290,53 @@ class MistNet(TorchModel):
             )
         return ret_dict
 
+    def _tanimoto_sim(self, pred_fp: torch.Tensor, target_fp: torch.Tensor) -> torch.Tensor:
+        """Per-example Tanimoto similarity between a binarized prediction
+        and the (already binary) target fingerprint. Higher is better,
+        unlike compute_loss's outputs -- more directly interpretable than
+        loss for judging whether a change actually helps (e.g. does aux
+        conditioning improve predicted fingerprints, not just lower a loss
+        term)."""
+        pred_bool = pred_fp > self.thresh
+        target_bool = target_fp.bool()
+        intersection = (pred_bool & target_bool).sum(-1).float()
+        union = (pred_bool | target_bool).sum(-1).float()
+        # A target with zero set bits (union==0) has undefined similarity;
+        # exclude rather than divide by zero (see callers' masking).
+        return intersection / union.clamp(min=1)
+
+    def _log_tanimoto(
+        self, prefix: str, pred_fp: torch.Tensor, target_fp: torch.Tensor, batch: dict
+    ) -> None:
+        """Log mean Tanimoto similarity overall, and split by whether each
+        example actually had real aux data (vs. absent/dropped-out) -- so
+        you can see whether aux conditioning helps specifically on the
+        examples it has real signal for, not just in aggregate."""
+        sim = self._tanimoto_sim(pred_fp, target_fp)
+        self.log(f"{prefix}_tanimoto", sim.mean(), batch_size=len(sim), on_epoch=True, logger=True)
+
+        for source in aux_featurizers.AUX_REGISTRY:
+            mask_key = f"aux_mask_{source}"
+            if mask_key not in batch:
+                continue
+            mask = batch[mask_key].bool()
+            if mask.any():
+                self.log(
+                    f"{prefix}_tanimoto_{source}_present",
+                    sim[mask].mean(),
+                    batch_size=int(mask.sum()),
+                    on_epoch=True,
+                    logger=True,
+                )
+            if (~mask).any():
+                self.log(
+                    f"{prefix}_tanimoto_{source}_absent",
+                    sim[~mask].mean(),
+                    batch_size=int((~mask).sum()),
+                    on_epoch=True,
+                    logger=True,
+                )
+
     def validation_step(self, batch, batch_idx):
         """Validation step"""
         pred_fp, aux_outputs_spec = self.encode_spectra(batch)
@@ -314,6 +361,7 @@ class MistNet(TorchModel):
         )
         for k, v in ret_dict.items():
             self.log(f"val_{k}", v, batch_size=len(pred_fp), logger=True, on_epoch=True)
+        self._log_tanimoto("val", pred_fp, target_fp, batch)
         return ret_dict
 
     def test_step(self, batch, batch_idx):
@@ -339,6 +387,7 @@ class MistNet(TorchModel):
             prog_bar=True,
             logger=True,
         )
+        self._log_tanimoto("test", pred_fp, target_fp, batch)
         return {"loss": mol_bce_loss_mean}
 
     def _build_model(
