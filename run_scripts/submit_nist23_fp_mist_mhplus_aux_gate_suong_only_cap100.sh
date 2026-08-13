@@ -1,5 +1,5 @@
 #!/bin/bash
-#SBATCH --job-name=nist23_fp_mist_aux32
+#SBATCH --job-name=nist23_fp_mist_mhplus_aux_gate_suong_only_cap100
 #SBATCH --output=logs/%x_%j.out
 #SBATCH --error=logs/%x_%j.err
 #SBATCH --partition=mit_preemptable,mit_normal_gpu,pi_ccoley,ou_cheme
@@ -7,7 +7,7 @@
 #SBATCH --cpus-per-task=16
 #SBATCH --gres=gpu:h100:1
 #SBATCH --mem=256G
-#SBATCH --time=24:00:00
+#SBATCH --time=06:00:00
 #SBATCH --requeue
 #SBATCH --signal=B:USR1@120
 
@@ -43,11 +43,17 @@ trap handle_preemption SIGUSR1
 
 DATA=/orcd/data/ccoley/001/msms_data/nist23
 
+# Same as _suong_only_cap10.sh, but --max-reactions-per-compound 100 (no
+# effective cap -- max observed is 200 rows/compound, but the vast majority
+# sit around 100, so 100 captures nearly all of suong's per-compound reaction
+# diversity instead of a random 10-of-~100 subsample). Tests whether the
+# cap10 run was throwing away meaningful signal by under-sampling suong's
+# reaction diversity per compound.
 pixi run python src/mist/train_mist.py \
     --cache-featurizers \
-    --labels-file "$DATA/labels.tsv" \
+    --labels-file data/nist23/labels_mh_only.tsv \
     --spec-folder "$DATA/spec_files.hdf5" \
-    --subform-folder "$DATA/subformulae/magma_subform_50.hdf5" \
+    --subform-folder data/nist23/subformulae/subform_50_repaired \
     --split-file "$DATA/splits/split_1.tsv" \
     --embed-instrument \
     --fp-names morgan4096 \
@@ -71,11 +77,14 @@ pixi run python src/mist/train_mist.py \
     --magma-modulo 512 \
     --form-embedder 'pos-cos' \
     --no-diffs \
-    --aux-dim 32 \
+    --aux-gate \
     --aux-dropout 0.2 \
-    --reaction-metadata-file /home/magled/mist/data/nist23/reaction_metadata_uspto.tsv \
+    --checkpoint-every-n-train-steps 500 \
+    --max-reactions-per-compound 100 \
+    --reaction-metadata-file \
+        /home/magled/mist/data/nist23/reaction_metadata_suong.tsv \
     --wandb-project mist-nist23 \
-    --save-dir results/nist23_fp_mist_aux32/split_1 &
+    --save-dir results/nist23_fp_mist_mhplus_aux_gate_suong_only_cap100/split_1 &
 
 CHILD_PID=$!
 wait $CHILD_PID

@@ -1,5 +1,5 @@
 #!/bin/bash
-#SBATCH --job-name=nist23_fp_mist_aux32
+#SBATCH --job-name=nist23_fp_mist_embed_adduct_aux_gate_all
 #SBATCH --output=logs/%x_%j.out
 #SBATCH --error=logs/%x_%j.err
 #SBATCH --partition=mit_preemptable,mit_normal_gpu,pi_ccoley,ou_cheme
@@ -43,13 +43,21 @@ trap handle_preemption SIGUSR1
 
 DATA=/orcd/data/ccoley/001/msms_data/nist23
 
+# Same as submit_nist23_fp_mist_embed_adduct.sh (full 13-adduct mix,
+# --embed-adduct), but adds the aux-gate reaction/candidate conditioning
+# (see submit_nist23_fp_mist_mhplus_aux_gate.sh) with all 4 reaction metadata
+# sources (uspto, cas, pistachio, suong) instead of the older --aux-dim
+# concatenation used for the full-adduct-mix numbers in
+# notebooks/gate_results_summary.ipynb Section 8. Tests whether aux-gate
+# reaction conditioning helps on the full adduct mix, not just [M+H]+-only.
 pixi run python src/mist/train_mist.py \
     --cache-featurizers \
     --labels-file "$DATA/labels.tsv" \
     --spec-folder "$DATA/spec_files.hdf5" \
-    --subform-folder "$DATA/subformulae/magma_subform_50.hdf5" \
+    --subform-folder data/nist23/subformulae/subform_50_repaired \
     --split-file "$DATA/splits/split_1.tsv" \
     --embed-instrument \
+    --embed-adduct \
     --fp-names morgan4096 \
     --num-workers 16 \
     --seed 1 \
@@ -71,11 +79,16 @@ pixi run python src/mist/train_mist.py \
     --magma-modulo 512 \
     --form-embedder 'pos-cos' \
     --no-diffs \
-    --aux-dim 32 \
+    --aux-gate \
     --aux-dropout 0.2 \
-    --reaction-metadata-file /home/magled/mist/data/nist23/reaction_metadata_uspto.tsv \
+    --checkpoint-every-n-train-steps 500 \
+    --reaction-metadata-file \
+        /home/magled/mist/data/nist23/reaction_metadata_uspto.tsv \
+        /home/magled/mist/data/nist23/reaction_metadata_cas.tsv \
+        /home/magled/mist/data/nist23/reaction_metadata_pistachio.tsv \
+        /home/magled/mist/data/nist23/reaction_metadata_suong.tsv \
     --wandb-project mist-nist23 \
-    --save-dir results/nist23_fp_mist_aux32/split_1 &
+    --save-dir results/nist23_fp_mist_embed_adduct_aux_gate_all/split_1 &
 
 CHILD_PID=$!
 wait $CHILD_PID
