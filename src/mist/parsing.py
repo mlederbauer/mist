@@ -346,6 +346,26 @@ def add_mist_args(parser):
         choices=["bce", "mse", "cosine"],
     )
     ma.add_argument(
+        "--binarization-thresh",
+        default=0.5,
+        type=float,
+        help=(
+            "Probability threshold for binarizing predicted fingerprint "
+            "bits before computing Tanimoto similarity (val_tanimoto/"
+            "test_tanimoto -- NOT used by the loss itself, which operates "
+            "on continuous predictions). The default 0.5 is a poor fit for "
+            "sparse fingerprints (roughly 1 percent bit density): most models' true "
+            "optimal threshold sits well below 0.5, so val_tanimoto/"
+            "test_tanimoto with the default can look far worse than the "
+            "model actually is, or even move the wrong direction as "
+            "training improves (e.g. a model whose predictions sharpen "
+            "will drop MORE below 0.5 over time, making Tanimoto look like "
+            "it's getting worse while loss improves). Sweep this per "
+            "checkpoint (e.g. against target bit density) rather than "
+            "trusting the default for anything beyond a rough sanity check."
+        ),
+    )
+    ma.add_argument(
         "--no-diffs",
         default=False,
         action="store_true",
@@ -521,6 +541,41 @@ def add_mist_args(parser):
             "conditioning data for an example, so the model doesn't learn "
             "to depend on it always being there. Only applies when "
             "--aux-dim > 0."
+        ),
+    )
+    ma.add_argument(
+        "--aux-gate",
+        default=False,
+        action="store_true",
+        help=(
+            "If true, use gated residual aux conditioning instead of the "
+            "--aux-dim concatenation path: for each configured aux source "
+            "(e.g. starting_materials), a learned per-bit gate (conditioned "
+            "on the spectrum encoding and that source's presence flag) "
+            "decides how much to blend the source's own fingerprint "
+            "directly into the final prediction, vs. the spectrum-only "
+            "prediction. Softmax-normalized across sources + the base "
+            "prediction so weights always form a valid convex combination. "
+            "When a source is absent, its weight is exactly 0 -- the "
+            "spectrum-only prediction is architecturally unaffected by "
+            "aux presence, so this is a strict generalization of plain "
+            "MIST, not a dependency on aux data ever being available. "
+            "Mutually exclusive with --aux-dim (pick one aux-conditioning "
+            "mechanism)."
+        ),
+    )
+    ma.add_argument(
+        "--aux-sources",
+        default=None,
+        nargs="+",
+        action="store",
+        choices=["starting_materials", "candidates"],
+        help=(
+            "Restrict aux conditioning (--aux-dim or --aux-gate) to only "
+            "these AUX_REGISTRY source(s) -- e.g. --aux-sources "
+            "starting_materials to ablate out candidates. Unset (default) "
+            "means all registered sources, same as before this flag "
+            "existed. Only meaningful when --aux-dim > 0 or --aux-gate."
         ),
     )
 

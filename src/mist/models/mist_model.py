@@ -398,13 +398,30 @@ class MistNet(TorchModel):
         refine_layers: int = 0,
         magma_modulo: int = 2048,
         aux_dim: int = 0,
+        aux_gate: bool = False,
+        aux_sources: Optional[List[str]] = None,
         **kwargs,
     ):
         """build_model"""
 
+        if aux_dim > 0 and aux_gate:
+            raise ValueError(
+                "--aux-dim and --aux-gate are two different aux-conditioning "
+                "mechanisms (concatenation vs. gated residual) -- pick one."
+            )
+
         self.hidden_size = hidden_size
         self.magma_modulo = magma_modulo
         self.aux_dim = aux_dim
+        self.aux_gate = aux_gate
+        # Restrict which AUX_REGISTRY sources get a projection/gate head at
+        # all, mirroring datasets.py's SpectraMolDataset.aux_sources -- both
+        # must agree, or the model would build (and the batch would lack)
+        # keys for a source that either side doesn't expect. None means
+        # every registered source, same as before this parameter existed.
+        self.aux_sources = (
+            aux_sources if aux_sources is not None else list(aux_featurizers.AUX_REGISTRY)
+        )
 
         # Can only be less than or equal to 2048
         # if self.magma_modulo > 2048:
@@ -446,8 +463,43 @@ class MistNet(TorchModel):
                         nn.Linear(self.output_size, aux_dim),
                         nn.LayerNorm(aux_dim),
                     )
-                    for source in aux_featurizers.AUX_REGISTRY
+                    for source in self.aux_sources
                 }
+            )
+
+        if self.aux_gate:
+            # Gated residual aux conditioning: the spectrum-only prediction
+            # (from spectra_predictor below, built with head_input_dim ==
+            # hidden_size -- NOT widened by aux_dim, since aux data plugs in
+            # after the head here, not before) is blended with each present
+            # aux source's own fingerprint, weighted by a per-bit gate score
+            # learned per source. All (base + one per source) gate scores
+            # are softmax-normalized per bit across only the PRESENT terms
+            # for that example (absent sources' scores are masked to -inf
+            # before the softmax, not just multiplied by 0 -- this is what
+            # makes an absent source's weight EXACTLY 0 and guarantees the
+            # remaining weights renormalize to sum to 1, unlike a raw
+            # multiply-then-renormalize scheme which is more failure-prone).
+            # Each gate head sees [encoder_output, presence_flag] so it can
+            # learn source-specific trust levels rather than sharing one
+            # generic "any aux present" signal across sources.
+            self.aux_gate_heads = nn.ModuleDict(
+                {
+                    source: nn.Sequential(
+                        nn.Linear(hidden_size + 1, hidden_size),
+                        nn.ReLU(),
+                        nn.Linear(hidden_size, self.output_size),
+                    )
+                    for source in self.aux_sources
+                }
+            )
+            # Base (spectrum-only) prediction's own per-bit gate score,
+            # conditioned on the encoder output alone (no presence flag --
+            # the base prediction is always "present").
+            self.aux_gate_base = nn.Sequential(
+                nn.Linear(hidden_size, hidden_size),
+                nn.ReLU(),
+                nn.Linear(hidden_size, self.output_size),
             )
 
         if self.iterative_preds == "none":
@@ -499,16 +551,53 @@ class MistNet(TorchModel):
             return None
         projected = [
             self.aux_projections[source](batch[f"aux_vec_{source}"])
-            for source in aux_featurizers.AUX_REGISTRY
+            for source in self.aux_sources
             if f"aux_vec_{source}" in batch
         ]
         if not projected:
             return None
         return torch.stack(projected, dim=0).sum(dim=0)
 
+    def _gated_aux_blend(
+        self, base_pred: torch.Tensor, encoder_output: torch.Tensor, batch: dict
+    ) -> torch.Tensor:
+        """Blend the spectrum-only prediction with each present aux
+        source's own fingerprint via a softmax-normalized, per-bit gate.
+
+        Every source's gate score is computed unconditionally (cheap, just
+        an MLP forward pass) but masked to -inf before the softmax when that
+        example lacks that source's data -- so its post-softmax weight is
+        EXACTLY 0, not just small, and the remaining terms' weights always
+        renormalize to sum to 1. When no aux source is present for an
+        example, this reduces to a softmax over a single (base) score,
+        i.e. weight 1 on base_pred -- architecturally identical to plain
+        MIST for that example, not merely close to it.
+        """
+        base_score = self.aux_gate_base(encoder_output)  # (batch, output_size)
+        scores = [base_score]
+        fps = [base_pred]
+
+        for source in self.aux_sources:
+            vec_key = f"aux_vec_{source}"
+            mask_key = f"aux_mask_{source}"
+            if vec_key not in batch:
+                continue
+            mask = batch[mask_key].bool()  # (batch,)
+            presence_flag = mask.float().unsqueeze(-1)  # (batch, 1)
+            gate_input = torch.cat([encoder_output, presence_flag], dim=-1)
+            score = self.aux_gate_heads[source](gate_input)  # (batch, output_size)
+            score = score.masked_fill(~mask.unsqueeze(-1), float("-inf"))
+            scores.append(score)
+            fps.append(batch[vec_key])
+
+        stacked_scores = torch.stack(scores, dim=0)  # (n_terms, batch, output_size)
+        weights = torch.softmax(stacked_scores, dim=0)
+        stacked_fps = torch.stack(fps, dim=0)  # (n_terms, batch, output_size)
+        return (weights * stacked_fps).sum(dim=0)
+
     def encode_spectra(self, batch: dict) -> Tuple[torch.Tensor, dict]:
         """encode_spectra."""
-        aux_cond = self._aux_conditioning_vec(batch)
+        aux_cond = None if self.aux_gate else self._aux_conditioning_vec(batch)
 
         if self.iterative_preds == "none":
             encoder_output, aux_out = self.spectra_encoder[0](batch, return_aux=True)
@@ -522,6 +611,8 @@ class MistNet(TorchModel):
                 else encoder_output
             )
             output = self.spectra_encoder[2](head_input)
+            if self.aux_gate:
+                output = self._gated_aux_blend(output, encoder_output, batch)
             aux_outputs["h0"] = encoder_output
 
         elif self.iterative_preds == "growing":
@@ -537,6 +628,8 @@ class MistNet(TorchModel):
             output = self.spectra_encoder[2](head_input)
             intermediates = output[:-1]
             final_output = output[-1]
+            if self.aux_gate:
+                final_output = self._gated_aux_blend(final_output, encoder_output, batch)
             aux_outputs["int_preds"] = intermediates
             output = final_output
             aux_outputs["h0"] = encoder_output

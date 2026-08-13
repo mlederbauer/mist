@@ -308,7 +308,9 @@ class SpectraMolDataset(Dataset):
         frac_orig: float = 0.4,
         forward_aug_folder=None,
         aux_dim: int = 0,
+        aux_gate: bool = False,
         aux_dropout: float = 0.2,
+        aux_sources: Optional[List[str]] = None,
         aux_reaction_id_by_spec: Optional[dict] = None,
         aux_seed: Optional[int] = None,
         aux_use_preset_data: bool = False,
@@ -320,11 +322,28 @@ class SpectraMolDataset(Dataset):
         self.forward_aug_folder = forward_aug_folder
 
         # Aux molecular conditioning (see mist.data.aux_featurizers). Off by
-        # default (aux_dim=0) -- a strict no-op, no aux keys added to
-        # batches, so this never affects anyone not using the feature.
+        # default (aux_dim=0, aux_gate=False) -- a strict no-op, no aux keys
+        # added to batches, so this never affects anyone not using the
+        # feature. Either aux-conditioning mechanism (--aux-dim concat or
+        # --aux-gate blend) needs the same underlying aux_vec_*/aux_mask_*
+        # batch keys, so both flags activate data loading the same way.
+        # aux_sources (CLI --aux-sources) restricts which AUX_REGISTRY
+        # entries are actually loaded/gated -- e.g. for an ablation that
+        # isolates starting_materials from candidates. None (default) means
+        # "all registered sources", same as before this parameter existed.
         self.aux_dim = aux_dim
+        self.aux_gate = aux_gate
         self.aux_dropout = aux_dropout
-        self.aux_sources = list(aux_featurizers.AUX_REGISTRY) if aux_dim > 0 else []
+        all_sources = list(aux_featurizers.AUX_REGISTRY)
+        if aux_sources is not None:
+            unknown = set(aux_sources) - set(all_sources)
+            if unknown:
+                raise ValueError(
+                    f"Unknown aux source(s) {unknown} -- must be a subset of "
+                    f"{all_sources}"
+                )
+        selected_sources = aux_sources if aux_sources is not None else all_sources
+        self.aux_sources = selected_sources if (aux_dim > 0 or aux_gate) else []
         self.aux_featurizers = {
             source: aux_featurizers.AUX_REGISTRY[source](fp_names=fp_names)
             for source in self.aux_sources

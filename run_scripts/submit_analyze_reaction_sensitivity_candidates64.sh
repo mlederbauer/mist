@@ -2,7 +2,7 @@
 #SBATCH --job-name=analyze_reaction_sensitivity_candidates64
 #SBATCH --output=logs/%x_%j.out
 #SBATCH --error=logs/%x_%j.err
-#SBATCH --partition=mit_preemptable,mit_normal_gpu,pi_ccoley
+#SBATCH --partition=mit_preemptable,mit_normal_gpu,pi_ccoley,ou_cheme
 #SBATCH --nodes=1
 #SBATCH --cpus-per-task=16
 #SBATCH --gres=gpu:h100:1
