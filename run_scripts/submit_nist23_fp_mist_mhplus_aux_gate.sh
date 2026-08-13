@@ -1,5 +1,5 @@
 #!/bin/bash
-#SBATCH --job-name=nist23_fp_mist_aux32_allrxn
+#SBATCH --job-name=nist23_fp_mist_mhplus_aux_gate
 #SBATCH --output=logs/%x_%j.out
 #SBATCH --error=logs/%x_%j.err
 #SBATCH --partition=mit_preemptable,mit_normal_gpu,pi_ccoley,ou_cheme
@@ -43,17 +43,33 @@ trap handle_preemption SIGUSR1
 
 DATA=/orcd/data/ccoley/001/msms_data/nist23
 
-# --subform-folder points at the repaired, paper-faithful subformula
-# assignments (data/nist23/subformulae/subform_50_repaired/, built by
-# run_scripts/submit_build_nist23_subform_repaired.sh) instead of
-# magma_subform_50.hdf5 -- see NIST23_TRAINING_CHANGELOG.md bug #2. The old
-# hdf5 assigned formulae per collision-energy block independently, then
-# concatenated them with no dedup; the repaired directory merges collision
-# blocks (dedup by rounded m/z, keep max intensity) BEFORE assigning
-# formulae once per spectrum, matching canopus_train/csi2022.
+# First iteration of gated-residual reaction conditioning (--aux-gate,
+# src/mist/models/mist_model.py): instead of concatenating a compressed
+# projection of the aux fingerprint onto the pooled spectrum representation
+# (--aux-dim), the aux source's OWN fingerprint is blended directly into the
+# final prediction via a learned, per-bit, softmax-normalized gate. When a
+# source is absent for an example, its gate weight is architecturally
+# exactly 0 (verified: masked to -inf pre-softmax, not just multiplied by a
+# near-zero learned weight) -- so this is a strict superset of plain MIST's
+# behavior, never a dependency on aux data being present. See the reaction
+# aux fingerprint correlation notebook (notebooks/reaction_aux_fp_correlation
+# .ipynb) for why this is motivated: starting_materials/candidates already
+# correlate with the true product fingerprint at ~4x random-pairing Tanimoto
+# similarity, a signal plain concatenation makes the model re-derive
+# indirectly through a lossy projection rather than exploiting directly.
+#
+# Scoped to [M+H]+ only (data/nist23/labels_mh_only.tsv) per the deliberate
+# decision to develop/validate the reaction-conditioning architecture on the
+# cleaner single-adduct subset first (closer to the original paper's
+# training regime, less confounded by NIST23's adduct-diversity issue,
+# which [M+H]+-only vs. full-mix experiments this session showed is a
+# LARGER, separate driver of the Tanimoto gap than reaction conditioning).
+# Generalizing back to the full adduct mix is a deliberately separate,
+# later step -- this script and the --aux-gate architecture make no
+# adduct-specific assumptions, so nothing here needs to change to do that.
 pixi run python src/mist/train_mist.py \
     --cache-featurizers \
-    --labels-file "$DATA/labels.tsv" \
+    --labels-file data/nist23/labels_mh_only.tsv \
     --spec-folder "$DATA/spec_files.hdf5" \
     --subform-folder data/nist23/subformulae/subform_50_repaired \
     --split-file "$DATA/splits/split_1.tsv" \
@@ -79,7 +95,7 @@ pixi run python src/mist/train_mist.py \
     --magma-modulo 512 \
     --form-embedder 'pos-cos' \
     --no-diffs \
-    --aux-dim 32 \
+    --aux-gate \
     --aux-dropout 0.2 \
     --checkpoint-every-n-train-steps 500 \
     --reaction-metadata-file \
@@ -87,7 +103,7 @@ pixi run python src/mist/train_mist.py \
         /home/magled/mist/data/nist23/reaction_metadata_cas.tsv \
         /home/magled/mist/data/nist23/reaction_metadata_pistachio.tsv \
     --wandb-project mist-nist23 \
-    --save-dir results/nist23_fp_mist_aux32_allrxn/split_1_repaired &
+    --save-dir results/nist23_fp_mist_mhplus_aux_gate/split_1 &
 
 CHILD_PID=$!
 wait $CHILD_PID

@@ -1,16 +1,27 @@
 """ analyze_reaction_sensitivity.py
 
-For an aux-conditioned MIST checkpoint, measure whether reaction context acts
-as guidance or memorization: for each val/test compound matching >=2
-reactions, run inference once per matched reaction (steered via
-aux_reaction_id_by_spec) plus once with no reaction, and report the spread of
-resulting Tanimoto similarity to the true fingerprint per compound.
+For an aux-conditioned MIST checkpoint (--aux-dim concatenation or --aux-gate
+blend), measure how reaction context affects predictions: for each val/test
+compound matching >=1 reaction, run inference once per matched reaction
+(steered via a per-row aux_data preset) plus once with no reaction, and
+report the resulting Tanimoto similarity to the true fingerprint per
+compound and condition.
 
-Low spread (all reactions + no-reaction give similar, similarly-good Tanimoto)
-means the model treats reaction context as a soft prior -- guidance. High
-spread (some reactions give great predictions, others terrible, wildly
-different from the no-reaction baseline) means the model learned
-reaction-specific shortcuts -- memorization.
+For compounds with a SINGLE matched reaction, this is a plain
+present-vs-absent comparison (reaction_tanimoto_mean vs.
+no_reaction_tanimoto) -- the number that answers "does the model actually
+benefit from a reaction prior when it has one," which eval-time defaults
+(no reaction unless explicitly steered) otherwise never exercise.
+
+For compounds with >=2 matched reactions, the additional spread stats
+(reaction_tanimoto_std/_min/_max) answer a second question: whether reaction
+context acts as guidance or memorization. Low spread (all reactions +
+no-reaction give similar, similarly-good Tanimoto) means the model treats
+reaction context as a soft prior -- guidance. High spread (some reactions
+give great predictions, others terrible, wildly different from the
+no-reaction baseline) means the model learned reaction-specific shortcuts --
+memorization. These stats are degenerate (std=0, min=max=mean) for
+single-reaction compounds, which is expected, not a bug.
 
 Usage:
     pixi run python -m mist.analyze_reaction_sensitivity \
@@ -51,6 +62,19 @@ def get_args():
     )
     parser.add_argument("--max-reactions-per-compound", type=int, default=10)
     parser.add_argument(
+        "--aux-source",
+        default="starting_materials",
+        choices=["starting_materials", "candidates"],
+        help=(
+            "Which aux source to steer with -- starting_materials (reaction "
+            "context) or candidates (only populated for a subset of USPTO "
+            "rows; a checkpoint trained without candidates data present will "
+            "have an untrained-but-live aux_projections['candidates'] "
+            "pathway, so this tests what an unlearned projection produces vs. "
+            "one that saw real candidates during training)."
+        ),
+    )
+    parser.add_argument(
         "--subset-datasets",
         default="test_only",
         choices=["none", "test_only", "val_only", "train_only"],
@@ -87,10 +111,11 @@ def run_analysis():
 
     pretrain_ckpt = torch.load(kwargs["model_ckpt"], map_location=torch.device("cpu"))
     main_hparams = pretrain_ckpt["hyper_parameters"]
-    if main_hparams.get("aux_dim", 0) <= 0:
+    if main_hparams.get("aux_dim", 0) <= 0 and not main_hparams.get("aux_gate", False):
         raise ValueError(
-            "This checkpoint was trained with aux_dim=0 -- reaction-sensitivity "
-            "analysis requires a checkpoint trained with --aux-dim > 0."
+            "This checkpoint was trained with aux_dim=0 and aux_gate=False -- "
+            "reaction-sensitivity analysis requires a checkpoint trained with "
+            "either --aux-dim > 0 or --aux-gate."
         )
     main_hparams.update(kwargs)
     kwargs = main_hparams
@@ -122,16 +147,25 @@ def run_analysis():
         max_reactions_per_compound=kwargs.get("max_reactions_per_compound") or None,
     )
 
-    # Keep only compounds with >=2 matched reactions -- a single-reaction
-    # compound has nothing to compare sensitivity across.
+    aux_source = kwargs["aux_source"]
+
+    # Keep compounds with >=1 matched reaction that ALSO has non-empty data
+    # for this source -- candidates is only populated for a subset of USPTO
+    # rows, so a reaction match doesn't guarantee usable candidates. >=1
+    # (rather than >=2) includes single-reaction compounds too, giving a
+    # plain present-vs-absent comparison for every matched compound, not
+    # just the >=2 subset used for the memorization-vs-guidance spread
+    # analysis (reaction_tanimoto_std/_min/_max are degenerate -- 0, equal
+    # to the mean -- for single-reaction compounds, which is expected, not a
+    # bug: there's only one condition to compare against "none").
     multi_reaction_pairs = [
         (spec, mol)
         for spec, mol in spectra_mol_pairs
-        if len(spec.get_aux_records("starting_materials")) >= 2
+        if sum(1 for r in spec.get_aux_records(aux_source) if r.get("smiles")) >= 1
     ]
     logging.info(
         f"{len(multi_reaction_pairs)}/{len(spectra_mol_pairs)} pairs have "
-        ">=2 matched reactions -- analyzing these"
+        ">=1 matched reaction -- analyzing these"
     )
     if not multi_reaction_pairs:
         logging.info("Nothing to analyze -- exiting")
@@ -161,10 +195,13 @@ def run_analysis():
         expanded_pairs.append((none_copy, mol))
         row_meta.append((spec_name, "none"))
 
-        for record in spec.get_aux_records("starting_materials"):
+        for record in spec.get_aux_records(aux_source):
+            if not record.get("smiles"):
+                continue
             rid = record["reaction_id"]
             reaction_copy = _copy.copy(spec)
-            reaction_copy.aux_data = {"starting_materials": [record], "candidates": []}
+            reaction_copy.aux_data = {"starting_materials": [], "candidates": []}
+            reaction_copy.aux_data[aux_source] = [record]
             expanded_pairs.append((reaction_copy, mol))
             row_meta.append((spec_name, rid))
 
@@ -207,7 +244,7 @@ def run_analysis():
     rows = []
     for spec_name, cond_sims in per_compound_tanimoto.items():
         reaction_sims = [v for k, v in cond_sims.items() if k != "none"]
-        if len(reaction_sims) < 2:
+        if len(reaction_sims) < 1:
             continue
         rows.append(
             {

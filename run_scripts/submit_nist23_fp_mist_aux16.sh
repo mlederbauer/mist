@@ -2,7 +2,7 @@
 #SBATCH --job-name=nist23_fp_mist_aux16
 #SBATCH --output=logs/%x_%j.out
 #SBATCH --error=logs/%x_%j.err
-#SBATCH --partition=mit_preemptable,mit_normal_gpu,pi_ccoley
+#SBATCH --partition=mit_preemptable,mit_normal_gpu,pi_ccoley,ou_cheme
 #SBATCH --nodes=1
 #SBATCH --cpus-per-task=16
 #SBATCH --gres=gpu:h100:1
@@ -10,10 +10,9 @@
 #SBATCH --time=24:00:00
 #SBATCH --requeue
 #SBATCH --signal=B:USR1@120
-#SBATCH --mail-type=END,FAIL,REQUEUE
-#SBATCH --mail-user=magled@mit.edu
 
 cd /home/magled/mist
+source "run_scripts/mail_notify.sh"
 export PATH="$HOME/.pixi/bin:$PATH"
 export TORCH_CPP_LOG_LEVEL="ERROR"
 

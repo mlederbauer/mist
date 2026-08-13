@@ -941,6 +941,7 @@ class PeakFormula(SpecFeaturizer):
             "magma_fps": fingerprints,
             "magma_aux_loss": self.magma_aux_loss,
             "instrument": instrument,
+            "root_ion": root_ion,
         }
         return out_dict
 
@@ -1008,6 +1009,7 @@ class PeakFormula(SpecFeaturizer):
         inten_tensors = [torch.from_numpy(j["frag_intens"]) for j in input_list]
         type_tensors = [torch.from_numpy(j["peak_type"]) for j in input_list]
         instrument_tensors = torch.FloatTensor([j["instrument"] for j in input_list])
+        root_ion_tensors = torch.FloatTensor([j["root_ion"] for j in input_list])
         ion_tensors = [torch.FloatTensor(j["ion_vec"]) for j in input_list]
 
         peak_form_lens = np.array([i.shape[0] for i in peak_form_tensors])
@@ -1068,6 +1070,7 @@ class PeakFormula(SpecFeaturizer):
             "names": names,
             "num_peaks": num_peaks,
             "instruments": instrument_tensors,
+            "root_ions": root_ion_tensors,
         }
 
         return_dict.update(magma_dict)

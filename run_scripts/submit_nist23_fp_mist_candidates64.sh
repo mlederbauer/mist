@@ -10,10 +10,9 @@
 #SBATCH --time=48:00:00
 #SBATCH --requeue
 #SBATCH --signal=B:USR1@120
-#SBATCH --mail-type=END,FAIL,REQUEUE
-#SBATCH --mail-user=magled@mit.edu
 
 cd /home/magled/mist
+source "run_scripts/mail_notify.sh"
 export PATH="$HOME/.pixi/bin:$PATH"
 export TORCH_CPP_LOG_LEVEL="ERROR"
 

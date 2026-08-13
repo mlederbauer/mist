@@ -1,5 +1,5 @@
 #!/bin/bash
-#SBATCH --job-name=analyze_reaction_sensitivity
+#SBATCH --job-name=analyze_reaction_sensitivity_allrxn_candidates
 #SBATCH --output=logs/%x_%j.out
 #SBATCH --error=logs/%x_%j.err
 #SBATCH --partition=mit_preemptable,mit_normal_gpu,pi_ccoley,ou_cheme
@@ -8,6 +8,7 @@
 #SBATCH --gres=gpu:h100:1
 #SBATCH --mem=128G
 #SBATCH --time=04:00:00
+# mail-type/mail-user removed: mail_notify.sh below emails log tails instead
 
 cd /home/magled/mist
 source "run_scripts/mail_notify.sh"
@@ -39,7 +40,8 @@ pixi run python -m mist.analyze_reaction_sensitivity \
         /home/magled/mist/data/nist23/reaction_metadata_uspto.tsv \
         /home/magled/mist/data/nist23/reaction_metadata_cas.tsv \
         /home/magled/mist/data/nist23/reaction_metadata_pistachio.tsv \
+    --aux-source candidates \
     --subset-datasets test_only \
     --num-workers 16 \
     --gpu \
-    --save-dir results/nist23_fp_mist_aux32_allrxn/split_1/split_1/preds
+    --save-dir results/nist23_fp_mist_aux32_allrxn/split_1/split_1/preds_candidates

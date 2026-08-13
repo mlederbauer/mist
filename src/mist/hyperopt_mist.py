@@ -145,20 +145,28 @@ def get_param_space(trial, kwargs={}):
     form_embedder = trial.suggest_categorical(
         "form_embedder", ["rbf", "float", "pos-cos"]
     )
-    trial.suggest_categorical("weight_decay", [1e-6, 1e-7, 0.0])
+    # Widened from [1e-6, 1e-7, 0.0] (all negligible/no-op strength) to also
+    # include stronger regularization -- a real train/val cosine-similarity
+    # gap (~0.79 train vs ~0.66-0.72 val, measured on the [M+H]+-only
+    # repaired-data run) indicates overfitting, and the old range never
+    # tried a weight decay strong enough to plausibly address that.
+    trial.suggest_categorical("weight_decay", [1e-7, 1e-6, 1e-5, 1e-4, 1e-3])
 
     # Model params
-    trial.suggest_float("spectra_dropout", 0, 0.3, step=0.1)
+    trial.suggest_float("spectra_dropout", 0, 0.5, step=0.1)
     trial.suggest_categorical("hidden_size", [128, 256, 512])
     trial.suggest_int("peak_attn_layers", 1, 5)
     trial.suggest_categorical("augment_data", [True, False])
+    # Batch size was never swept before -- also a real, cheap-to-test lever
+    # for the same overfitting question (larger batches: smoother, less
+    # noisy gradient estimates; smaller: more implicit regularization).
+    trial.suggest_categorical("batch_size", [64, 128, 256])
 
     # Iterative  loss
     trial.suggest_float("iterative_loss_weight", 0.0, 1, step=0.1)
     trial.suggest_int("refine_layers", 1, 5)
 
     # Magma loss
-    augment_data = trial.suggest_categorical("augment_data", [True, False])
     trial.suggest_int("magma_loss_lambda", 0, 15)
 
 
@@ -178,6 +186,7 @@ def get_initial_points() -> List[Dict]:
         "hidden_size": 256,
         "peak_attn_layers": 2,
         "augment_data": True,
+        "batch_size": 128,
         "iterative_loss_weight": 0.4,
         "refine_layers": 4,
         "form_embedder": "float",

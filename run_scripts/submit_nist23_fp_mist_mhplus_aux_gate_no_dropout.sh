@@ -1,5 +1,5 @@
 #!/bin/bash
-#SBATCH --job-name=nist23_fp_mist_aux32
+#SBATCH --job-name=nist23_fp_mist_mhplus_aux_gate_no_dropout
 #SBATCH --output=logs/%x_%j.out
 #SBATCH --error=logs/%x_%j.err
 #SBATCH --partition=mit_preemptable,mit_normal_gpu,pi_ccoley,ou_cheme
@@ -43,11 +43,20 @@ trap handle_preemption SIGUSR1
 
 DATA=/orcd/data/ccoley/001/msms_data/nist23
 
+# Hparam variant of submit_nist23_fp_mist_mhplus_aux_gate.sh (the "both
+# sources" run): --aux-dropout 0.0 instead of the default 0.2. Tests
+# whether randomly zeroing present aux data during training (so the model
+# doesn't learn to depend on it always being there) helps or hurts the
+# GATE specifically -- --aux-dropout was tuned/defaulted for the older
+# concatenation-based (--aux-dim) conditioning path; the gate's presence
+# flag already gives it an explicit, always-visible signal about whether
+# aux data is real for this example, so it's not obvious the same dropout
+# rate (or dropout at all) is still the right regularization here.
 pixi run python src/mist/train_mist.py \
     --cache-featurizers \
-    --labels-file "$DATA/labels.tsv" \
+    --labels-file data/nist23/labels_mh_only.tsv \
     --spec-folder "$DATA/spec_files.hdf5" \
-    --subform-folder "$DATA/subformulae/magma_subform_50.hdf5" \
+    --subform-folder data/nist23/subformulae/subform_50_repaired \
     --split-file "$DATA/splits/split_1.tsv" \
     --embed-instrument \
     --fp-names morgan4096 \
@@ -71,11 +80,15 @@ pixi run python src/mist/train_mist.py \
     --magma-modulo 512 \
     --form-embedder 'pos-cos' \
     --no-diffs \
-    --aux-dim 32 \
-    --aux-dropout 0.2 \
-    --reaction-metadata-file /home/magled/mist/data/nist23/reaction_metadata_uspto.tsv \
+    --aux-gate \
+    --aux-dropout 0.0 \
+    --checkpoint-every-n-train-steps 500 \
+    --reaction-metadata-file \
+        /home/magled/mist/data/nist23/reaction_metadata_uspto.tsv \
+        /home/magled/mist/data/nist23/reaction_metadata_cas.tsv \
+        /home/magled/mist/data/nist23/reaction_metadata_pistachio.tsv \
     --wandb-project mist-nist23 \
-    --save-dir results/nist23_fp_mist_aux32/split_1 &
+    --save-dir results/nist23_fp_mist_mhplus_aux_gate_no_dropout/split_1 &
 
 CHILD_PID=$!
 wait $CHILD_PID

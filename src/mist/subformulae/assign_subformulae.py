@@ -13,6 +13,7 @@ import json
 
 from tqdm import tqdm
 from mist import utils
+from mist.utils.hdf5_utils import Hdf5Store, is_hdf5_path
 
 
 def get_args():
@@ -90,6 +91,43 @@ def process_spec_file(spec_name: str, spec_files: str, max_inten=0.001, max_peak
     return spec_name, spec
 
 
+_HDF5_STORE_CACHE = {}
+
+
+def _get_hdf5_store(spec_files: str) -> Hdf5Store:
+    """Open (or reuse) an Hdf5Store for this process. chunked_parallel calls
+    process_spec_hdf5 once per spectrum, not once per chunk -- caching the
+    open h5py.File handle per worker process avoids re-opening the same
+    (networked-filesystem) hdf5 file thousands of times."""
+    store = _HDF5_STORE_CACHE.get(spec_files)
+    if store is None:
+        store = Hdf5Store(spec_files)
+        _HDF5_STORE_CACHE[spec_files] = store
+    return store
+
+
+def process_spec_hdf5(spec_name: str, spec_files: str, max_inten=0.001, max_peaks=60):
+    """Same as process_spec_file, but reads the raw .ms text for spec_name
+    out of an hdf5 store (a single key lookup) instead of opening a file on
+    disk. Merges all collision-energy blocks in that .ms text (via the same
+    parse_spectra_str + process_spec_file pipeline used for directory-based
+    datasets) into one deduplicated, max-intensity-per-m/z spectrum before
+    any formula assignment happens -- matching how canopus_train/csi2022
+    were originally processed, rather than assigning formulae per collision
+    block and concatenating afterwards.
+
+    Takes spec_files (a path, not an open Hdf5Store) so a fresh handle is
+    opened (and cached) per forked worker process -- an already-open
+    h5py.File from the parent is not reliably shareable across a fork.
+    """
+    spectra_hdf5 = _get_hdf5_store(spec_files)
+    key = f"{spec_name}.ms"
+    text = spectra_hdf5[key]
+    meta, tuples = utils.parse_spectra_str(text, file_name=key)
+    spec = utils.process_spec_file(meta, tuples)
+    return spec_name, spec
+
+
 def assign_subforms(spec_files, labels_file,
                     mass_diff_thresh: int = 20,
                     mass_diff_type: str = "ppm",
@@ -139,6 +177,26 @@ def assign_subforms(spec_files, labels_file,
         input_specs = [utils.process_spec_file(*i) for i in parsed_specs]
         spec_names = [i[0][feature_id] for i in parsed_specs]
         input_specs = list(zip(spec_names, input_specs))
+    elif is_hdf5_path(spec_files):
+        # Packed format: a single .hdf5 keyed by "{spec}.ms", where each
+        # value's raw .ms text may itself contain multiple collision-energy
+        # blocks (e.g. NIST20/NIST23). Look up each labels.tsv spec name
+        # directly (single-key check, no full listing -- see hdf5_utils.py)
+        # and merge its collision blocks into one spectrum before formula
+        # assignment, same as the directory-of-.ms-files path below.
+        spectra_hdf5 = Hdf5Store(spec_files)
+        spec_fn_lst = [
+            s for s in labels_df["spec"].to_list() if f"{s}.ms" in spectra_hdf5
+        ]
+        proc_spec_full = partial(
+            process_spec_hdf5,
+            spec_files=str(spec_files),
+            max_inten=inten_thresh,
+            max_peaks=max_formulae,
+        )
+        input_specs = utils.chunked_parallel(
+            spec_fn_lst, proc_spec_full, chunks=100, max_cpu=max(num_workers, 1)
+        )
     elif spec_files.is_dir():
         spec_fn_lst = labels_df["spec"].to_list()
         proc_spec_full = partial(
@@ -152,13 +210,16 @@ def assign_subforms(spec_files, labels_file,
             spec_fn_lst, proc_spec_full, chunks=100, max_cpu=max(num_workers, 1)
         )
     else:
-        raise ValueError(f"Spec files arg {spec_files} is not a dir or mgf")
+        raise ValueError(f"Spec files arg {spec_files} is not a dir, hdf5, or mgf")
 
     # input_specs contains a list of tuples (spec, subpeak tuple array)
     input_specs_dict = {tup[0]: tup[1] for tup in input_specs}
     export_dicts, spec_names = [], []
     for _, row in labels_df.iterrows():
         spec = str(row["spec"])
+        if spec not in input_specs_dict:
+            # e.g. hdf5 branch: spec name absent from the hdf5 store.
+            continue
         new_entry = {
             "spec": input_specs_dict[spec],
             "form": row["formula"],
@@ -174,7 +235,9 @@ def assign_subforms(spec_files, labels_file,
     print(f"There are {len(export_dicts)} spec-cand pairs this spec files")
     def export_wrapper(x): return utils.get_output_dict(**x)
     if debug:
-        output_dict_lst = [export_wrapper(i) for i in export_dicts[:10]]
+        export_dicts = export_dicts[:10]
+        spec_names = spec_names[:10]
+        output_dict_lst = [export_wrapper(i) for i in export_dicts]
     else:
         output_dict_lst = utils.chunked_parallel(
             export_dicts, export_wrapper, chunks=100, max_cpu=max(num_workers, 1)

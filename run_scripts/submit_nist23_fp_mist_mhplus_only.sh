@@ -1,5 +1,5 @@
 #!/bin/bash
-#SBATCH --job-name=nist23_fp_mist_aux32
+#SBATCH --job-name=nist23_fp_mist_mhplus_only
 #SBATCH --output=logs/%x_%j.out
 #SBATCH --error=logs/%x_%j.err
 #SBATCH --partition=mit_preemptable,mit_normal_gpu,pi_ccoley,ou_cheme
@@ -43,11 +43,19 @@ trap handle_preemption SIGUSR1
 
 DATA=/orcd/data/ccoley/001/msms_data/nist23
 
+# Same as submit_nist23_fp_mist.sh (repaired subformula data), but restricted
+# to [M+H]+ spectra only via data/nist23/labels_mh_only.tsv (80,372/176,851
+# rows) -- the single adduct the original MIST paper trained on. Comparison
+# point for whether NIST23's broader adduct mix (13 types, 45.5% [M+H]+)
+# helps or hurts relative to the paper's narrower, single-adduct setup.
+# split_1.tsv is left as the full split file; PresetSpectraSplitter only
+# assigns folds to specs actually present in the loaded (filtered) dataset,
+# so no separate filtered split file is needed.
 pixi run python src/mist/train_mist.py \
     --cache-featurizers \
-    --labels-file "$DATA/labels.tsv" \
+    --labels-file data/nist23/labels_mh_only.tsv \
     --spec-folder "$DATA/spec_files.hdf5" \
-    --subform-folder "$DATA/subformulae/magma_subform_50.hdf5" \
+    --subform-folder data/nist23/subformulae/subform_50_repaired \
     --split-file "$DATA/splits/split_1.tsv" \
     --embed-instrument \
     --fp-names morgan4096 \
@@ -71,11 +79,8 @@ pixi run python src/mist/train_mist.py \
     --magma-modulo 512 \
     --form-embedder 'pos-cos' \
     --no-diffs \
-    --aux-dim 32 \
-    --aux-dropout 0.2 \
-    --reaction-metadata-file /home/magled/mist/data/nist23/reaction_metadata_uspto.tsv \
     --wandb-project mist-nist23 \
-    --save-dir results/nist23_fp_mist_aux32/split_1 &
+    --save-dir results/nist23_fp_mist_mhplus_only/split_1 &
 
 CHILD_PID=$!
 wait $CHILD_PID

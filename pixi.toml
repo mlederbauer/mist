@@ -30,6 +30,7 @@ scikit-learn = "*"
 pyyaml = "*"
 cairosvg = "*"
 tensorboard = "*"
+matplotlib-venn = ">=1.1.2,<2"
 
 [pypi-dependencies]
 torch = { version = ">=2.5.0", index = "https://download.pytorch.org/whl/cu121" }
